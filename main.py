@@ -1,6 +1,6 @@
-from fastapi import FastAPI
+fromfastapiimport FastAPI
 app = FastAPI()
 @app.get("/")
-def home():
-    return {"status": "Railway is running
+de fhome():
+return {"status": "Railway is running
     ✅"}
