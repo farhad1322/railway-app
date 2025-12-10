@@ -1,0 +1,15 @@
+{
+  "name": "railway-test-backend",
+  "version": "1.0.0",
+  "description": "Simple Node backend for Railway + starter for eBay automation",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": "18.x"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
