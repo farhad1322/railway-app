@@ -1,11 +1,17 @@
 const express = require("express");
-const app = express();
+const cors = require("cors");
+const ebayRouter = require("./routes/ebay");
 
+const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Root route
+// Middlewares
+app.use(cors());
+app.use(express.json());
+
+// Root route – just a welcome message
 app.get("/", (req, res) => {
-  res.send("✅ Backend is running on Railway (Farhad test server)");
+  res.send("✅ Backend is running on Railway (Farhad eBay UK+US backend)");
 });
 
 // Health check route
@@ -13,14 +19,8 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok", time: new Date().toISOString() });
 });
 
-// eBay automation starter route
-app.get("/ebay/ping", (req, res) => {
-  res.json({
-    ok: true,
-    message: "eBay automation backend skeleton is ready.",
-    nextStep: "Add real eBay APIs and automation logic here."
-  });
-});
+// eBay routes (UK + US + future markets)
+app.use("/ebay", ebayRouter);
 
 // Start server
 app.listen(PORT, () => {
