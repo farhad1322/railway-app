@@ -7,37 +7,34 @@ const ebayRouter = require("./config/routes/ebay");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ---------------------
+// ----------------------
 // Middlewares
-// ---------------------
+// ----------------------
 app.use(cors());
 app.use(express.json());
 
-// ---------------------
+// ----------------------
 // Connect eBay routes
-// ---------------------
+// ----------------------
 app.use("/api/ebay", ebayRouter);
 
-// ---------------------
-// Root route
-// ---------------------
+// ----------------------
+// Root route - welcome message
+// ----------------------
 app.get("/", (req, res) => {
-  res.send("✓ Backend is running on Railway (Farhad eBay UK+US backend)");
+  res.send("✔ Backend is running on Railway (Farhad eBay UK+US backend)!");
 });
 
-// ---------------------
-// Health check route
-// ---------------------
+// ----------------------
+// Health Check
+// ----------------------
 app.get("/health", (req, res) => {
-  res.json({
-    status: "ok",
-    time: new Date(),
-  });
+  res.json({ status: "ok", message: "Server is healthy!" });
 });
 
-// ---------------------
-// Start the Server
-// ---------------------
+// ----------------------
+// Start server
+// ----------------------
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
