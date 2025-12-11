@@ -138,6 +138,65 @@ router.get("/profit", (req, res) => {
   });
 
   res.json(result);
+  /**
+ * -----------------------------------------------------
+ * Profit Calculator (Business Seller Model - Option B)
+ * -----------------------------------------------------
+ * Example:
+ * GET /api/ebay/profit?market=UK&price=19.99&cost=8&shipping=2.50
+ */
+
+router.get("/profit", (req, res) => {
+    const marketCode = req.query.market || "UK";
+    const price = parseFloat(req.query.price || 0);
+    const cost = parseFloat(req.query.cost || 0);
+    const shipping = parseFloat(req.query.shipping || 0);
+
+    const market = getMarket(marketCode);
+
+    if (!market) {
+        return res.status(400).json({
+            ok: false,
+            error: "Invalid market. Use UK or US.",
+        });
+    }
+
+    // -----------------------------------------------------
+    // BUSINESS SELLER FEES (OPTION B)
+    // -----------------------------------------------------
+    const ebayFeeRate = 0.128;   // 12.8%
+    const fixedFee = market.currency === "GBP" ? 0.30 : 0.30; // £0.30 or $0.30
+
+    // Calculate eBay fees
+    const ebayFee = price * ebayFeeRate + fixedFee;
+
+    // Profit formula
+    const profit = price - cost - shipping - ebayFee;
+
+    // Profit margin (%)
+    const margin = (profit / price) * 100;
+
+    res.json({
+        ok: true,
+        market: market.code,
+        currency: market.currency,
+        input: {
+            price,
+            cost,
+            shipping,
+        },
+        fees: {
+            ebayFeeRate: ebayFeeRate * 100 + "%",
+            fixedFee,
+            totalFees: ebayFee.toFixed(2),
+        },
+        result: {
+            profit: profit.toFixed(2),
+            margin: margin.toFixed(2) + "%",
+        },
+    });
+});
+
 });
 
 module.exports = router;
