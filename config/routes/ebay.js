@@ -1,9 +1,11 @@
 const express = require("express");
-const { MARKETS, listMarkets, getMarket } = require("../config/ebayMarkets");
+const { MARKETS, listMarkets, getMarket } = require("./ebayMarkets");
 
 const router = express.Router();
 
-// Simple ping – confirms eBay engine is alive
+// -----------------------
+// Simple ping route
+// -----------------------
 router.get("/ping", (req, res) => {
   res.json({
     ok: true,
@@ -12,7 +14,9 @@ router.get("/ping", (req, res) => {
   });
 });
 
-// List all supported markets (UK + US)
+// -----------------------
+// List all supported markets
+// -----------------------
 router.get("/markets", (req, res) => {
   res.json({
     count: listMarkets().length,
@@ -20,28 +24,25 @@ router.get("/markets", (req, res) => {
   });
 });
 
-// Get info about a specific market (UK or US)
-router.get("/markets/:code", (req, res) => {
-  const market = getMarket(req.params.code);
+// -----------------------
+// Get details of a specific market
+// Example: /api/ebay/market/UK
+// -----------------------
+router.get("/market/:code", (req, res) => {
+  const code = req.params.code.toUpperCase();
+  const market = getMarket(code);
 
   if (!market) {
     return res.status(404).json({
       ok: false,
-      error: "Unknown market code. Use 'UK' or 'US'."
+      error: `Market '${code}' not found.`,
+      supportedMarkets: Object.keys(MARKETS)
     });
   }
 
   res.json({
     ok: true,
     market
-  });
-});
-
-// Placeholder for future: product research, listing, orders, etc.
-router.get("/todo", (req, res) => {
-  res.json({
-    ok: true,
-    message: "Here we will add product research, listing, pricing, and orders APIs."
   });
 });
 
