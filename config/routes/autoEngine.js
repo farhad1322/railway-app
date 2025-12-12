@@ -1,311 +1,420 @@
 // config/routes/autoEngine.js
-// High-level smart engine for Amazon→eBay sourcing, autopricing & dashboard
+// High-level smart engine for Amazon -> eBay sourcing, pricing, scoring & dashboard
 
 const express = require("express");
 const router = express.Router();
 
 /**
- * Small helper to safely convert query values into numbers
+ * Small helper: safe numbers
  */
 function num(value, fallback = 0) {
   const n = parseFloat(value);
   return Number.isFinite(n) ? n : fallback;
 }
 
-/* ------------------------------------------------------------------ */
-/* A) AMAZON → EBAY REVERSE SOURCING ENGINE                           */
-/* ------------------------------------------------------------------ */
 /**
- * GET /api/engine/source/amazon-ebay
- *
- * Example:
- *   /api/engine/source/amazon-ebay?q=iphone+case&market=UK&amazonPrice=5.99&amazonShipping=0
- *
- * Required:
- *   q             -> keyword
- *   amazonPrice   -> Amazon product price
- *
- * Optional:
- *   amazonShipping -> Amazon shipping cost
- *   market         -> "UK" or "US" (default "UK")
+ * Clamp value between min / max
  */
-router.get("/source/amazon-ebay", (req, res) => {
-  const q = (req.query.q || "").trim();
-  const market = (req.query.market || "UK").toUpperCase();
-  const amazonPrice = num(req.query.amazonPrice);
-  const amazonShipping = num(req.query.amazonShipping);
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
 
-  if (!q || !amazonPrice) {
-    return res.status(400).json({
-      ok: false,
-      error:
-        "Missing q or amazonPrice. Example: ?q=iphone+case&market=UK&amazonPrice=5.99&amazonShipping=0",
-    });
+/**
+ * Simple hash from string (for deterministic fake data)
+ */
+function hashString(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = (h * 31 + str.charCodeAt(i)) & 0xffffffff;
   }
+  return Math.abs(h);
+}
 
-  const currency = market === "US" ? "USD" : "GBP";
+/**
+ * Generate a “score” between 0 and 100 from any number
+ */
+function scoreFrom(seed, bias = 0.5) {
+  const base = (seed % 1000) / 1000; // 0..1
+  const adjusted = bias * base + (1 - bias) * (1 - base); // push towards bias
+  return Math.round(adjusted * 100);
+}
 
-  // Base markup & fee assumptions – you can tweak these later
-  const baseMarkup = market === "US" ? 1.6 : 1.7; // Sell for ~60–70% above Amazon cost
-  const feePercent = market === "US" ? 12 : 13; // eBay + payment + other
-
-  const totalCost = amazonPrice + amazonShipping;
-  const recommendedSellPrice = +(totalCost * baseMarkup).toFixed(2);
-  const feeAmount = +((recommendedSellPrice * feePercent) / 100).toFixed(2);
-  const estimatedProfit = +(recommendedSellPrice - totalCost - feeAmount).toFixed(2);
-
-  const roiPercent =
-    totalCost > 0 ? +((estimatedProfit / totalCost) * 100).toFixed(2) : 0;
-
-  // Build an overall opportunity score & verdict
-  let rating = "C";
-  let verdict = "Average – might be OK with good optimisation.";
-
-  if (estimatedProfit <= 0 || roiPercent < 10) {
-    rating = "D";
-    verdict = "Weak – low or negative profit. Look for another angle or product.";
-  } else if (roiPercent >= 40 && estimatedProfit >= 10) {
-    rating = "A";
-    verdict = "Strong – excellent margin, high-priority sourcing candidate.";
-  } else if (roiPercent >= 25) {
-    rating = "B";
-    verdict = "Good – profitable, keep under monitoring.";
+/**
+ * Market presets (you can tweak later)
+ */
+const MARKETS = {
+  UK: {
+    code: "UK",
+    currency: "GBP",
+    ebayFeePercent: 12, // example fee %
+    shippingBaseline: 2.5
+  },
+  US: {
+    code: "US",
+    currency: "USD",
+    ebayFeePercent: 13,
+    shippingBaseline: 3.0
   }
+};
 
-  const opportunityScore = Math.max(
-    0,
-    Math.min(100, Math.round(roiPercent + estimatedProfit))
-  );
+function resolveMarket(raw) {
+  const key = String(raw || "").toUpperCase();
+  return MARKETS[key] || MARKETS["UK"];
+}
+
+/* -------------------------------------------------------------------------- */
+/* 0) ENGINE HEALTH CHECK                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * GET /api/engine/ping
+ * Very simple “alive” check for this engine only.
+ */
+router.get("/ping", (req, res) => {
+  const markets = Object.keys(MARKETS);
 
   res.json({
     ok: true,
-    engine: "amazon-ebay-reverse-sourcing",
-    query: q,
-    market,
-    currency,
+    message: "Auto engine is alive and ready.",
+    markets,
+    engine: "Amazon -> eBay ultra engine v1.0"
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* A) AMAZON -> EBAY REVERSE SOURCING ENGINE                                  */
+/* -------------------------------------------------------------------------- */
+/**
+ * Goal: if you know Amazon price (buy price) + fees, estimate the eBay
+ * target selling price range to still hit your target margin.
+ *
+ * Example:
+ *   /api/engine/reverse-sourcing?market=UK&amazonPrice=12.99&amazonFees=15&shipping=2.5
+ */
+router.get("/reverse-sourcing", (req, res) => {
+  const market = resolveMarket(req.query.market);
+  const amazonPrice = num(req.query.amazonPrice, 0);
+  const amazonFeesPercent = num(req.query.amazonFees, 15); // % of Amazon price
+  const shipping = num(req.query.shipping, market.shippingBaseline);
+  const desiredMarginPercent = num(req.query.targetMargin, 30); // desired net margin on eBay
+
+  if (amazonPrice <= 0) {
+    return res.status(400).json({
+      ok: false,
+      error: "Missing or invalid amazonPrice. Example: ?amazonPrice=12.99&amazonFees=15&shipping=2.5"
+    });
+  }
+
+  const amazonFeesAmount = (amazonFeesPercent / 100) * amazonPrice;
+  const effectiveCost = amazonPrice + amazonFeesAmount; // what you really pay
+
+  // On eBay: sellingPrice - ebayFees - shipping - cost = profit
+  // ebayFees = sellingPrice * ebayFeePercent
+  const f = market.ebayFeePercent / 100;
+  const c = effectiveCost + shipping;
+  const targetMargin = desiredMarginPercent / 100;
+
+  // profit = sellingPrice * (1 - f) - c
+  // margin% = profit / sellingPrice = targetMargin
+  // => sellingPrice * (1 - f - targetMargin) = c
+  const denominator = 1 - f - targetMargin;
+
+  let recommendedSell = null;
+  if (denominator > 0) {
+    recommendedSell = c / denominator;
+  } else {
+    // if denominator <= 0, target margin is too aggressive
+    recommendedSell = c / (1 - f) * 1.05; // minimal 5% mark-up
+  }
+
+  const breakEvenPrice = c / (1 - f);
+  const safeLower = breakEvenPrice * 1.05; // 5% margin
+  const aggressive = recommendedSell * 1.15; // little higher for testing market
+
+  res.json({
+    ok: true,
+    market: market.code,
+    currency: market.currency,
     inputs: {
       amazonPrice,
-      amazonShipping,
-      baseMarkup,
-      feePercent,
+      amazonFeesPercent,
+      shipping,
+      desiredMarginPercent
     },
-    outputs: {
-      recommendedEbayPrice: recommendedSellPrice,
-      feeAmount,
-      estimatedProfit,
-      roiPercent,
-      opportunityScore,
-      rating,
-      verdict,
+    calculations: {
+      amazonFeesAmount: amazonFeesAmount.toFixed(2),
+      effectiveCost: effectiveCost.toFixed(2),
+      ebayFeePercent: market.ebayFeePercent
     },
+    pricing: {
+      breakEvenPrice: breakEvenPrice.toFixed(2),
+      recommendedSell: recommendedSell.toFixed(2),
+      safeLower: safeLower.toFixed(2),
+      aggressiveUpper: aggressive.toFixed(2)
+    }
   });
 });
 
-/* ------------------------------------------------------------------ */
-/* B) SMART AUTOPRICING ENGINE                                        */
-/* ------------------------------------------------------------------ */
+/* -------------------------------------------------------------------------- */
+/* B) ADVANCED EBAY PRICING & ROI SCENARIOS                                   */
+/* -------------------------------------------------------------------------- */
 /**
- * GET /api/engine/pricing/auto
+ * GET /api/engine/auto-price
+ *
+ * Inputs:
+ *   market, buyPrice, shippingCost, feePercent?, targetMarginPercent?
  *
  * Example:
- *   /api/engine/pricing/auto?market=UK&currentPrice=19.99&cost=8&demandLevel=70&competitionLevel=30
- *
- * Required:
- *   currentPrice       -> your current listing price
- *
- * Optional:
- *   cost               -> your total cost (buy + shipping + fees you know)
- *   demandLevel        -> 0–100 (how strong is demand)
- *   competitionLevel   -> 0–100 (how strong is competition)
- *   minMarginPercent   -> minimum profit margin you accept (default 18)
- *   maxChangePercent   -> max % up/down we allow (default 20%)
+ *   /api/engine/auto-price?market=UK&buyPrice=8.5&shippingCost=2.2&targetMarginPercent=25
  */
-router.get("/pricing/auto", (req, res) => {
-  const market = (req.query.market || "UK").toUpperCase();
-  const currentPrice = num(req.query.currentPrice);
-  const cost = num(req.query.cost);
-  const demandLevel = num(req.query.demandLevel, 50); // 0–100
-  const competitionLevel = num(req.query.competitionLevel, 50); // 0–100
-  const minMarginPercent = num(req.query.minMarginPercent, 18);
-  const maxChangePercent = num(req.query.maxChangePercent, 20); // cap move
+router.get("/auto-price", (req, res) => {
+  const market = resolveMarket(req.query.market);
+  const buyPrice = num(req.query.buyPrice, 0);
+  const shippingCost = num(req.query.shippingCost, market.shippingBaseline);
+  const feePercent = num(req.query.feePercent, market.ebayFeePercent);
+  const targetMarginPercent = num(req.query.targetMarginPercent, 25);
 
-  if (!currentPrice) {
+  if (buyPrice <= 0) {
     return res.status(400).json({
       ok: false,
-      error:
-        "Missing currentPrice. Example: ?market=UK&currentPrice=19.99&cost=8&demandLevel=70&competitionLevel=30",
+      error: "Missing or invalid buyPrice. Example: ?buyPrice=8.5&shippingCost=2.2&targetMarginPercent=25"
     });
   }
 
-  // Pressure > 0  => demand > competition => we can increase price
-  // Pressure < 0  => competition > demand => we should reduce price
-  const pressure = demandLevel - competitionLevel; // -100 .. +100
-  let rawAdjustment = pressure / 200; // -0.5 .. +0.5 ( -50% .. +50% )
+  const totalCost = buyPrice + shippingCost;
+  const f = feePercent / 100;
+  const t = targetMarginPercent / 100;
 
-  const maxAdj = maxChangePercent / 100;
-  if (rawAdjustment > maxAdj) rawAdjustment = maxAdj;
-  if (rawAdjustment < -maxAdj) rawAdjustment = -maxAdj;
+  const breakEvenPrice = totalCost / (1 - f);
+  const targetSell = totalCost / (1 - f - t);
 
-  const suggestedPrice = +(currentPrice * (1 + rawAdjustment)).toFixed(2);
-  const changePercent = +(
-    ((suggestedPrice - currentPrice) / currentPrice) *
-    100
-  ).toFixed(2);
-
-  let strategy = "hold";
-  if (changePercent > 1) strategy = "increase";
-  else if (changePercent < -1) strategy = "decrease";
-
-  // Margin based on cost if provided
-  let currentMarginPercent = null;
-  let suggestedMarginPercent = null;
-
-  if (cost > 0) {
-    currentMarginPercent = +(
-      ((currentPrice - cost) / currentPrice) *
-      100
-    ).toFixed(2);
-    suggestedMarginPercent = +(
-      ((suggestedPrice - cost) / suggestedPrice) *
-      100
-    ).toFixed(2);
+  function calcProfit(sellPrice) {
+    const fees = sellPrice * f;
+    const profit = sellPrice - fees - totalCost;
+    const marginPercent = (profit / sellPrice) * 100;
+    const roiPercent = (profit / totalCost) * 100;
+    return {
+      sellPrice: sellPrice.toFixed(2),
+      profit: profit.toFixed(2),
+      marginPercent: marginPercent.toFixed(2),
+      roiPercent: roiPercent.toFixed(2),
+      feeAmount: fees.toFixed(2)
+    };
   }
 
-  const marginOK =
-    suggestedMarginPercent === null ||
-    suggestedMarginPercent >= minMarginPercent;
+  const scenarios = {
+    conservative: calcProfit(breakEvenPrice * 1.08), // 8% margin
+    target: calcProfit(targetSell),
+    aggressive: calcProfit(targetSell * 1.15)
+  };
 
   res.json({
     ok: true,
-    engine: "smart-autopricer",
-    market,
+    market: market.code,
+    currency: market.currency,
     inputs: {
-      currentPrice,
-      cost,
-      demandLevel,
-      competitionLevel,
-      minMarginPercent,
-      maxChangePercent,
+      buyPrice,
+      shippingCost,
+      feePercent,
+      targetMarginPercent
     },
-    outputs: {
-      suggestedPrice,
-      changePercent,
-      strategy,
-      currentMarginPercent,
-      suggestedMarginPercent,
-      marginOK,
-      notes: [
-        strategy === "increase"
-          ? "Demand is stronger than competition – system recommends a price increase."
-          : strategy === "decrease"
-          ? "Competition is strong vs demand – system recommends a price decrease to stay competitive."
-          : "Price is balanced – hold and monitor.",
-        !marginOK
-          ? "Warning: suggested price would break your minimum margin."
-          : "Margin is within your minimum target.",
-      ],
+    totals: {
+      totalCost: totalCost.toFixed(2),
+      breakEvenPrice: breakEvenPrice.toFixed(2),
+      targetSell: targetSell.toFixed(2)
     },
+    scenarios
   });
 });
 
-/* ------------------------------------------------------------------ */
-/* E) MASTER DASHBOARD & PREMIUM ANALYTICS                            */
-/* ------------------------------------------------------------------ */
+/* -------------------------------------------------------------------------- */
+/* C) PRODUCT / NICHE SCORING ENGINE                                          */
+/* -------------------------------------------------------------------------- */
 /**
- * GET /api/engine/dashboard/summary
+ * This is a “generic” scoring engine. It doesn’t call real eBay yet,
+ * but it gives powerful structure:
  *
- * Example:
- *   /api/engine/dashboard/summary?market=UK&revenue7d=500&profit7d=130&orders7d=40&activeListings=80&winningListings=12
- *
- * Optional metrics (you can pass what you have):
- *   revenue7d        -> total sales last 7 days
- *   profit7d         -> total profit last 7 days
- *   orders7d         -> number of orders last 7 days
- *   activeListings   -> how many active listings you have
- *   winningListings  -> how many listings are real “winners”
+ * GET /api/engine/product-score?q=iphone+14+case&market=UK
  */
-router.get("/dashboard/summary", (req, res) => {
-  const market = (req.query.market || "UK").toUpperCase();
+router.get("/product-score", (req, res) => {
+  const q = (req.query.q || "").trim();
+  const market = resolveMarket(req.query.market);
 
-  const revenue7d = num(req.query.revenue7d);
-  const profit7d = num(req.query.profit7d);
-  const orders7d = num(req.query.orders7d);
-  const activeListings = num(req.query.activeListings);
-  const winningListings = num(req.query.winningListings);
-
-  const avgOrderValue =
-    orders7d > 0 ? +(revenue7d / orders7d).toFixed(2) : 0;
-  const profitMarginPercent =
-    revenue7d > 0 ? +((profit7d / revenue7d) * 100).toFixed(2) : 0;
-  const winRatePercent =
-    activeListings > 0
-      ? +((winningListings / activeListings) * 100).toFixed(2)
-      : 0;
-
-  // Seller health score 0–100 (simple but effective)
-  let healthScore = 50;
-  healthScore += (profitMarginPercent - 15) * 0.8;
-  healthScore += (winRatePercent - 10) * 0.6;
-  healthScore = Math.max(0, Math.min(100, Math.round(healthScore)));
-
-  let stage = "Building";
-  if (healthScore >= 80) stage = "Elite seller";
-  else if (healthScore >= 60) stage = "Scaling";
-  else if (healthScore >= 40) stage = "Early growth";
-
-  const suggestions = [];
-
-  if (profitMarginPercent < 15) {
-    suggestions.push(
-      "Increase prices on best sellers or reduce sourcing / shipping cost – margin is below 15%."
-    );
-  } else if (profitMarginPercent < 25) {
-    suggestions.push(
-      "Good margin, but you can push a bit higher on strong items (test +5–10% price increases)."
-    );
-  } else {
-    suggestions.push(
-      "Excellent margin. Focus on scaling traffic and stock, keep an eye on competition."
-    );
+  if (!q) {
+    return res.status(400).json({
+      ok: false,
+      error: "Missing q (keyword). Example: ?q=iphone+14+case&market=UK"
+    });
   }
 
-  if (winRatePercent < 10) {
-    suggestions.push(
-      "Very low winner rate. Use your /api/ebay/winners endpoint more to trim bad listings."
-    );
-  } else if (winRatePercent < 25) {
-    suggestions.push(
-      "OK winner rate, but you can still cut the bottom 20% worst performers."
-    );
+  const seed = hashString(q + "|" + market.code);
+
+  // Build scores from seed
+  const demandScore = clamp(scoreFrom(seed, 0.7), 10, 98);
+  const competitionScore = clamp(scoreFrom(seed * 3, 0.4), 5, 95);
+  const saturationScore = clamp(scoreFrom(seed * 7, 0.5), 5, 95);
+
+  // Higher opportunity when demand high, competition & saturation low
+  const opportunityScore = clamp(
+    Math.round(
+      demandScore * 0.5 +
+      (100 - competitionScore) * 0.25 +
+      (100 - saturationScore) * 0.25
+    ),
+    0,
+    100
+  );
+
+  // Simple textual suggestion
+  let verdict;
+  if (opportunityScore >= 80) {
+    verdict = "Excellent – strong candidate for a winning product.";
+  } else if (opportunityScore >= 60) {
+    verdict = "Good – worth testing with 5–10 listings or variations.";
+  } else if (opportunityScore >= 40) {
+    verdict = "Average – only test if you have unique angle or bundle.";
   } else {
-    suggestions.push(
-      "Strong winner rate. Consider increasing ad spend / traffic to these products."
-    );
+    verdict = "Weak – avoid unless you niche down further.";
   }
 
-  suggestions.push(
-    "Reinvest a portion of your monthly profit into new product testing (5–10 new SKUs / week)."
+  res.json({
+    ok: true,
+    query: q,
+    market: market.code,
+    currency: market.currency,
+    scores: {
+      demandScore,
+      competitionScore,
+      saturationScore,
+      opportunityScore
+    },
+    verdict
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* D) RISK / SATURATION HEATMAP FOR A KEYWORD                                 */
+/* -------------------------------------------------------------------------- */
+/**
+ * GET /api/engine/risk-map?q=iphone+14+case&market=UK
+ *
+ * Returns “zones” of risk to help you decide how safe this niche is.
+ */
+router.get("/risk-map", (req, res) => {
+  const q = (req.query.q || "").trim();
+  const market = resolveMarket(req.query.market);
+
+  if (!q) {
+    return res.status(400).json({
+      ok: false,
+      error: "Missing q (keyword). Example: ?q=iphone+14+case&market=UK"
+    });
+  }
+
+  const seed = hashString("risk|" + q + "|" + market.code);
+  const baseRisk = clamp(scoreFrom(seed, 0.6), 5, 95);
+
+  const riskZones = [
+    {
+      zone: "pricing",
+      riskScore: clamp(baseRisk + (seed % 7) - 3, 0, 100),
+      note: "Discount wars & race-to-bottom pricing possible."
+    },
+    {
+      zone: "policy",
+      riskScore: clamp(baseRisk + ((seed >> 3) % 9) - 4, 0, 100),
+      note: "Watch for brand, copyright, or VERO issues."
+    },
+    {
+      zone: "returns",
+      riskScore: clamp(baseRisk + ((seed >> 6) % 11) - 5, 0, 100),
+      note: "Higher risk if product fragile or subjective (size, color, fit)."
+    },
+    {
+      zone: "supply-chain",
+      riskScore: clamp(baseRisk + ((seed >> 9) % 13) - 6, 0, 100),
+      note: "Check stock stability with your suppliers."
+    }
+  ];
+
+  const avgRisk =
+    riskZones.reduce((sum, z) => sum + z.riskScore, 0) / riskZones.length;
+
+  res.json({
+    ok: true,
+    query: q,
+    market: market.code,
+    averageRisk: Math.round(avgRisk),
+    riskZones
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* E) DASHBOARD SUMMARY: WHAT TO WATCH TODAY                                  */
+/* -------------------------------------------------------------------------- */
+/**
+ * GET /api/engine/dashboard?market=UK
+ *
+ * Simple high-level snapshot of:
+ *  - hot keywords
+ *  - risky areas
+ *  - suggested actions
+ */
+router.get("/dashboard", (req, res) => {
+  const market = resolveMarket(req.query.market);
+  const baseSeed = hashString("dashboard|" + market.code);
+
+  const hotKeywords = [
+    "water bottle",
+    "phone case",
+    "led strip lights",
+    "car organiser",
+    "wireless earbuds"
+  ].map((kw, idx) => {
+    const seed = baseSeed + idx * 137;
+    const opp = clamp(scoreFrom(seed, 0.65), 30, 100);
+    const demand = clamp(scoreFrom(seed * 2, 0.7), 30, 100);
+    const comp = clamp(scoreFrom(seed * 3, 0.4), 10, 95);
+
+    return {
+      keyword: kw,
+      demandScore: demand,
+      competitionScore: comp,
+      opportunityScore: opp
+    };
+  });
+
+  const overallOpportunity = Math.round(
+    hotKeywords.reduce((sum, k) => sum + k.opportunityScore, 0) /
+      hotKeywords.length
+  );
+
+  const actions = [];
+
+  if (overallOpportunity >= 70) {
+    actions.push(
+      "Increase testing budget for 3–5 hot products in " + market.code
+    );
+  } else if (overallOpportunity >= 50) {
+    actions.push("Test 2–3 products with small daily budget.");
+  } else {
+    actions.push("Focus on research – overall market looks crowded.");
+  }
+
+  actions.push(
+    "Use profit calculator + auto-price to confirm at least 25–35% net ROI before listing."
+  );
+  actions.push(
+    "Use risk-map on each main keyword to avoid policy & return headaches."
   );
 
   res.json({
     ok: true,
-    engine: "master-dashboard",
-    market,
-    inputs: {
-      revenue7d,
-      profit7d,
-      orders7d,
-      activeListings,
-      winningListings,
-    },
-    metrics: {
-      avgOrderValue,
-      profitMarginPercent,
-      winRatePercent,
-      healthScore,
-      stage,
-    },
-    suggestions,
+    market: market.code,
+    currency: market.currency,
+    overallOpportunity,
+    hotKeywords,
+    actions
   });
 });
 
