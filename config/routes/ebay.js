@@ -198,5 +198,98 @@ router.get("/profit", (req, res) => {
 });
 
 });
+// ----------------------------------------------------------
+//  BEST-SELLER / OPPORTUNITY SCANNER (Option A)
+//  GET /api/ebay/bestseller?q=iphone+case&market=UK
+// ----------------------------------------------------------
+router.get("/bestseller", (req, res) => {
+    const q = (req.query.q || "").trim();
+    const marketCode = (req.query.market || "UK").toUpperCase();
+
+    if (!q) {
+        return res.status(400).json({
+            ok: false,
+            error: "Missing search term `q`.",
+            example: "/api/ebay/bestseller?q=iphone+case&market=UK"
+        });
+    }
+
+    const market = getMarket(marketCode);
+    if (!market) {
+        return res.status(400).json({
+            ok: false,
+            error: `Unknown market '${marketCode}'. Use one of: ${Object.keys(MARKETS).join(", ")}`
+        });
+    }
+
+    // ---------- Fake but realistic-looking numbers ----------
+    const seed = (q + marketCode).length;
+
+    const sampleSize = 40 + (seed % 40);      // 40–79 items found
+    const uniqueSellers = 8 + (seed % 15);    // 8–22 sellers
+    const avgPrice = 8 + (seed % 25);         // 8–32 price range
+    const minPrice = Math.max(3, avgPrice - (3 + (seed % 4)));
+    const maxPrice = avgPrice + (4 + (seed % 6));
+
+    // ---------- Scoring model (0–100) ----------
+    // demandScore: more items → more demand
+    const demandScore = Math.min(30, Math.round(sampleSize / 2));
+
+    // competitionScore: fewer sellers → better (higher score)
+    const competitionScore = Math.max(5, 35 - uniqueSellers);
+
+    // saturationScore: sellers vs listings (higher = more saturated)
+    const saturationScore = Math.round((uniqueSellers / sampleSize) * 100);
+
+    // opportunityScore: mix of all three
+    let opportunityScore = demandScore + competitionScore - Math.round(saturationScore / 5);
+    opportunityScore = Math.max(0, Math.min(100, opportunityScore));
+
+    let rating;
+    let verdict;
+
+    if (opportunityScore >= 80) {
+        rating = "A+";
+        verdict = "Excellent — strong demand with very friendly competition.";
+    } else if (opportunityScore >= 65) {
+        rating = "A";
+        verdict = "Very Good — good balance of demand vs competition.";
+    } else if (opportunityScore >= 50) {
+        rating = "B";
+        verdict = "OK — possible niche, but you must optimise listing.";
+    } else if (opportunityScore >= 35) {
+        rating = "C";
+        verdict = "Weak — high competition or low demand.";
+    } else {
+        rating = "D";
+        verdict = "Poor — avoid this product, look for a different angle.";
+    }
+
+    res.json({
+        ok: true,
+        query: q,
+        market: market.code,
+        currency: market.currency,
+        sampleSize,
+        stats: {
+            totalItems: sampleSize,
+            uniqueSellers,
+            avgPrice,
+            minPrice,
+            maxPrice
+        },
+        scores: {
+            demandScore,
+            competitionScore,
+            saturationScore,
+            opportunityScore
+        },
+        decision: {
+            rating,
+            verdict
+        }
+    });
+});
+
 
 module.exports = router;
