@@ -1,53 +1,51 @@
-// ----------------------------------------------------
-// Main Server File (index.js)
-// Fully connected with eBay routes + Auto Engine
-// ----------------------------------------------------
+// index.js – main Express app for your eBay automation backend
 
 const express = require("express");
 const cors = require("cors");
 
-// ----------------------------
-// Import Routers (Correct Paths)
-// ----------------------------
+// Route modules
 const ebayRouter = require("./config/routes/ebay");
-const autoEngineRouter = require("./config/routes/autoEngine");
+const engineRouter = require("./config/routes/autoEngine");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ----------------------------
+// ----------------------
 // Middlewares
-// ----------------------------
+// ----------------------
 app.use(cors());
 app.use(express.json());
 
-// ----------------------------
-// Route Connections
-// ----------------------------
-
-// eBay main API routes
-app.use("/api/ebay", ebayRouter);
-
-// Auto Engine (Market Analyzer) routes
-app.use("/api/engine", autoEngineRouter);
-
-// ----------------------------
-// Root route
-// ----------------------------
+// ----------------------
+// Root route – simple info
+// ----------------------
 app.get("/", (req, res) => {
-    res.json({
-        ok: true,
-        message: "Backend is running. Use /api/ebay or /api/engine",
-        endpoints: {
-            ebay: "/api/ebay",
-            engine: "/api/engine"
-        }
-    });
+  res.json({
+    ok: true,
+    message: "Backend is running. Use /api/ebay or /api/engine",
+    endpoints: {
+      ebay: "/api/ebay",
+      engine: "/api/engine",
+    },
+  });
 });
 
-// ----------------------------
-// Start Server
-// ----------------------------
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+// ----------------------
+// Attach routers
+// ----------------------
+app.use("/api/ebay", ebayRouter);
+app.use("/api/engine", engineRouter);
+
+// Simple health check for Railway
+app.get("/health", (req, res) => {
+  res.json({ ok: true });
 });
+
+// ----------------------
+// Start server
+// ----------------------
+app.listen(PORT, () => {
+  console.log(`Backend server listening on port ${PORT}`);
+});
+
+module.exports = app;
