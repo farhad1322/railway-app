@@ -1,40 +1,53 @@
+// ----------------------------------------------------
+// Main Server File (index.js)
+// Fully connected with eBay routes + Auto Engine
+// ----------------------------------------------------
+
 const express = require("express");
 const cors = require("cors");
 
-// Correct path to your eBay router
+// ----------------------------
+// Import Routers (Correct Paths)
+// ----------------------------
 const ebayRouter = require("./config/routes/ebay");
+const autoEngineRouter = require("./config/routes/autoEngine");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ----------------------
+// ----------------------------
 // Middlewares
-// ----------------------
+// ----------------------------
 app.use(cors());
 app.use(express.json());
 
-// ----------------------
-// Connect eBay routes
-// ----------------------
+// ----------------------------
+// Route Connections
+// ----------------------------
+
+// eBay main API routes
 app.use("/api/ebay", ebayRouter);
 
-// ----------------------
-// Root route - welcome message
-// ----------------------
+// Auto Engine (Market Analyzer) routes
+app.use("/api/engine", autoEngineRouter);
+
+// ----------------------------
+// Root route
+// ----------------------------
 app.get("/", (req, res) => {
-  res.send("✔ Backend is running on Railway (Farhad eBay UK+US backend)!");
+    res.json({
+        ok: true,
+        message: "Backend is running. Use /api/ebay or /api/engine",
+        endpoints: {
+            ebay: "/api/ebay",
+            engine: "/api/engine"
+        }
+    });
 });
 
-// ----------------------
-// Health Check
-// ----------------------
-app.get("/health", (req, res) => {
-  res.json({ status: "ok", message: "Server is healthy!" });
-});
-
-// ----------------------
-// Start server
-// ----------------------
+// ----------------------------
+// Start Server
+// ----------------------------
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });
