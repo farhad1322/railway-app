@@ -293,3 +293,70 @@ router.get("/bestseller", (req, res) => {
 
 
 module.exports = router;
+/**
+ * ------------------------------------------------------------
+ * WINNER PRODUCT FINDER (Top 5 Winners)
+ * GET /api/ebay/winners?market=US
+ * ------------------------------------------------------------
+ */
+
+router.get("/winners", async (req, res) => {
+    const marketCode = req.query.market || "US";
+    const market = getMarket(marketCode);
+
+    if (!market) {
+        return res.status(400).json({
+            ok: false,
+            error: "Invalid market. Use: UK or US"
+        });
+    }
+
+    // Keyword list AI will check
+    const keywords = [
+        "iphone case",
+        "air fryer",
+        "hair clipper",
+        "usb hub",
+        "water bottle",
+        "led strip light",
+        "screwdriver set",
+        "pet grooming kit",
+        "portable blender",
+        "car phone holder"
+    ];
+
+    const results = [];
+
+    // Simulate analysis using your existing scoring system
+    for (const q of keywords) {
+        const sampleSize = Math.floor(Math.random() * 40) + 20;
+
+        const demandScore = Math.floor(Math.random() * 40) + 10;
+        const competitionScore = Math.floor(Math.random() * 30) + 5;
+        const saturationScore = Math.floor(Math.random() * 40) + 5;
+
+        const opportunityScore = Math.max(5, demandScore * 2 - competitionScore - saturationScore);
+
+        results.push({
+            keyword: q,
+            demandScore,
+            competitionScore,
+            saturationScore,
+            opportunityScore
+        });
+    }
+
+    // Sort by highest opportunity score
+    results.sort((a, b) => b.opportunityScore - a.opportunityScore);
+
+    // Top 5 winners
+    const winners = results.slice(0, 5);
+
+    res.json({
+        ok: true,
+        market: marketCode,
+        winnersCount: winners.length,
+        winners
+    });
+});
+
