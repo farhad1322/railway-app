@@ -651,6 +651,7 @@ router.get("/safety/sanitize", (req, res) => {
       "If verdict is still DO_NOT_LIST after sanitizing, avoid the item/category or remove brand/claims completely.",
   });
 });
+router.use("/image-guard", require("./imageGuard"));
 
 /* ------------------------- Export ------------------------- */
 module.exports = router;
