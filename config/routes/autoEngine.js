@@ -1,11 +1,12 @@
 // config/routes/autoEngine.js
-// High-level smart engine for Amazon -> eBay sourcing, pricing, scoring & dashboard
+// High-level smart engine for Amazon→eBay sourcing, autopricing & dashboard
+// Version: 1.5 (Market Sweeper + Daily Winner Planner)
 
 const express = require("express");
 const router = express.Router();
 
 /**
- * Small helper: safe numbers
+ * Small helper to safely convert query values into numbers
  */
 function num(value, fallback = 0) {
   const n = parseFloat(value);
@@ -13,409 +14,539 @@ function num(value, fallback = 0) {
 }
 
 /**
- * Clamp value between min / max
+ * Simple deterministic hash so the same keyword always gives same scores
  */
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
-}
-
-/**
- * Simple hash from string (for deterministic fake data)
- */
-function hashString(str) {
+function hashToSeed(str) {
   let h = 0;
   for (let i = 0; i < str.length; i++) {
-    h = (h * 31 + str.charCodeAt(i)) & 0xffffffff;
+    h = (h * 31 + str.charCodeAt(i)) | 0;
   }
-  return Math.abs(h);
+  return Math.abs(h) + 1;
 }
 
-/**
- * Generate a “score” between 0 and 100 from any number
- */
-function scoreFrom(seed, bias = 0.5) {
-  const base = (seed % 1000) / 1000; // 0..1
-  const adjusted = bias * base + (1 - bias) * (1 - base); // push towards bias
-  return Math.round(adjusted * 100);
+function makeScore(seed, offset, min = 10, max = 90) {
+  const v = (seed * (offset + 3)) % 9973;
+  const normalized = v / 9973; // 0–1
+  return Math.round(min + normalized * (max - min));
 }
 
-/**
- * Market presets (you can tweak later)
- */
-const MARKETS = {
-  UK: {
-    code: "UK",
-    currency: "GBP",
-    ebayFeePercent: 12, // example fee %
-    shippingBaseline: 2.5
-  },
-  US: {
-    code: "US",
-    currency: "USD",
-    ebayFeePercent: 13,
-    shippingBaseline: 3.0
-  }
-};
-
-function resolveMarket(raw) {
-  const key = String(raw || "").toUpperCase();
-  return MARKETS[key] || MARKETS["UK"];
+function baseCurrency(market) {
+  return market === "US" ? "USD" : "GBP";
 }
 
-/* -------------------------------------------------------------------------- */
-/* 0) ENGINE HEALTH CHECK                                                      */
-/* -------------------------------------------------------------------------- */
+// ---------------------------------------------------------
+// 0) Health check
+// ---------------------------------------------------------
 
-/**
- * GET /api/engine/ping
- * Very simple “alive” check for this engine only.
- */
 router.get("/ping", (req, res) => {
-  const markets = Object.keys(MARKETS);
-
   res.json({
     ok: true,
     message: "Auto engine is alive and ready.",
-    markets,
-    engine: "Amazon -> eBay ultra engine v1.0"
+    markets: ["UK", "US"],
+    engine: "Amazon -> eBay ultra engine v1.5",
   });
 });
 
-/* -------------------------------------------------------------------------- */
-/* A) AMAZON -> EBAY REVERSE SOURCING ENGINE                                  */
-/* -------------------------------------------------------------------------- */
-/**
- * Goal: if you know Amazon price (buy price) + fees, estimate the eBay
- * target selling price range to still hit your target margin.
- *
- * Example:
- *   /api/engine/reverse-sourcing?market=UK&amazonPrice=12.99&amazonFees=15&shipping=2.5
- */
+// ---------------------------------------------------------
+// 1) AMAZON → EBAY REVERSE SOURCING ENGINE
+// ---------------------------------------------------------
+// GET /api/engine/reverse-sourcing?market=UK&amazonPrice=12.99&amazonFeesPercent=15&shipping=2.5&desiredMarginPercent=30
+
 router.get("/reverse-sourcing", (req, res) => {
-  const market = resolveMarket(req.query.market);
+  const market = (req.query.market || "UK").toUpperCase();
+  const currency = baseCurrency(market);
+
   const amazonPrice = num(req.query.amazonPrice, 0);
-  const amazonFeesPercent = num(req.query.amazonFees, 15); // % of Amazon price
-  const shipping = num(req.query.shipping, market.shippingBaseline);
-  const desiredMarginPercent = num(req.query.targetMargin, 30); // desired net margin on eBay
+  const amazonFeesPercent = num(req.query.amazonFeesPercent, 15); // Amazon fee %
+  const shipping = num(req.query.shipping, 0);
+  const desiredMarginPercent = num(req.query.desiredMarginPercent, 30);
 
-  if (amazonPrice <= 0) {
-    return res.status(400).json({
-      ok: false,
-      error: "Missing or invalid amazonPrice. Example: ?amazonPrice=12.99&amazonFees=15&shipping=2.5"
-    });
-  }
+  const amazonFeesAmount = (amazonPrice * amazonFeesPercent) / 100;
+  const effectiveCost = amazonPrice + amazonFeesAmount + shipping;
 
-  const amazonFeesAmount = (amazonFeesPercent / 100) * amazonPrice;
-  const effectiveCost = amazonPrice + amazonFeesAmount; // what you really pay
+  // Assume eBay fee approx. 12% of sell price
+  const ebayFeePercent = 12;
+  const breakEvenPrice = effectiveCost / (1 - ebayFeePercent / 100);
 
-  // On eBay: sellingPrice - ebayFees - shipping - cost = profit
-  // ebayFees = sellingPrice * ebayFeePercent
-  const f = market.ebayFeePercent / 100;
-  const c = effectiveCost + shipping;
-  const targetMargin = desiredMarginPercent / 100;
-
-  // profit = sellingPrice * (1 - f) - c
-  // margin% = profit / sellingPrice = targetMargin
-  // => sellingPrice * (1 - f - targetMargin) = c
-  const denominator = 1 - f - targetMargin;
-
-  let recommendedSell = null;
-  if (denominator > 0) {
-    recommendedSell = c / denominator;
-  } else {
-    // if denominator <= 0, target margin is too aggressive
-    recommendedSell = c / (1 - f) * 1.05; // minimal 5% mark-up
-  }
-
-  const breakEvenPrice = c / (1 - f);
-  const safeLower = breakEvenPrice * 1.05; // 5% margin
-  const aggressive = recommendedSell * 1.15; // little higher for testing market
+  // Target sell price for desired margin (net)
+  const targetSell = effectiveCost * (1 + desiredMarginPercent / 100);
+  const safeLower = targetSell * 0.69; // still acceptable margin
+  const aggressiveUpper = targetSell * 1.15;
 
   res.json({
     ok: true,
-    market: market.code,
-    currency: market.currency,
+    market,
+    currency,
     inputs: {
       amazonPrice,
       amazonFeesPercent,
       shipping,
-      desiredMarginPercent
+      desiredMarginPercent,
     },
     calculations: {
-      amazonFeesAmount: amazonFeesAmount.toFixed(2),
-      effectiveCost: effectiveCost.toFixed(2),
-      ebayFeePercent: market.ebayFeePercent
+      amazonFeesAmount: +amazonFeesAmount.toFixed(2),
+      effectiveCost: +effectiveCost.toFixed(2),
+      ebayFeePercent,
     },
     pricing: {
-      breakEvenPrice: breakEvenPrice.toFixed(2),
-      recommendedSell: recommendedSell.toFixed(2),
-      safeLower: safeLower.toFixed(2),
-      aggressiveUpper: aggressive.toFixed(2)
-    }
+      breakEvenPrice: +breakEvenPrice.toFixed(2),
+      recommendedSell: +targetSell.toFixed(2),
+      safeLower: +safeLower.toFixed(2),
+      aggressiveUpper: +aggressiveUpper.toFixed(2),
+    },
   });
 });
 
-/* -------------------------------------------------------------------------- */
-/* B) ADVANCED EBAY PRICING & ROI SCENARIOS                                   */
-/* -------------------------------------------------------------------------- */
-/**
- * GET /api/engine/auto-price
- *
- * Inputs:
- *   market, buyPrice, shippingCost, feePercent?, targetMarginPercent?
- *
- * Example:
- *   /api/engine/auto-price?market=UK&buyPrice=8.5&shippingCost=2.2&targetMarginPercent=25
- */
-router.get("/auto-price", (req, res) => {
-  const market = resolveMarket(req.query.market);
-  const buyPrice = num(req.query.buyPrice, 0);
-  const shippingCost = num(req.query.shippingCost, market.shippingBaseline);
-  const feePercent = num(req.query.feePercent, market.ebayFeePercent);
-  const targetMarginPercent = num(req.query.targetMarginPercent, 25);
+// ---------------------------------------------------------
+// 2) AUTOPRICE ENGINE – MULTI-SCENARIO
+// ---------------------------------------------------------
+// GET /api/engine/auto-price?market=US&buyPrice=8.5&shippingCost=3&targetMarginPercent=30&feePercent=13
 
-  if (buyPrice <= 0) {
-    return res.status(400).json({
-      ok: false,
-      error: "Missing or invalid buyPrice. Example: ?buyPrice=8.5&shippingCost=2.2&targetMarginPercent=25"
-    });
-  }
+router.get("/auto-price", (req, res) => {
+  const market = (req.query.market || "US").toUpperCase();
+  const currency = baseCurrency(market);
+
+  const buyPrice = num(req.query.buyPrice, 0);
+  const shippingCost = num(req.query.shippingCost, 0);
+  const targetMarginPercent = num(req.query.targetMarginPercent, 30);
+  const feePercent = num(req.query.feePercent, 12);
 
   const totalCost = buyPrice + shippingCost;
-  const f = feePercent / 100;
-  const t = targetMarginPercent / 100;
+  const breakEvenPrice = totalCost / (1 - feePercent / 100);
+  const targetSell = totalCost * (1 + targetMarginPercent / 100);
 
-  const breakEvenPrice = totalCost / (1 - f);
-  const targetSell = totalCost / (1 - f - t);
+  function scenario(multiplier) {
+    const sellPrice = targetSell * multiplier;
+    const feeAmount = (sellPrice * feePercent) / 100;
+    const profit = sellPrice - totalCost - feeAmount;
+    const marginPercent = (profit / totalCost) * 100;
+    const roiPercent = (profit / (buyPrice || 1)) * 100;
 
-  function calcProfit(sellPrice) {
-    const fees = sellPrice * f;
-    const profit = sellPrice - fees - totalCost;
-    const marginPercent = (profit / sellPrice) * 100;
-    const roiPercent = (profit / totalCost) * 100;
     return {
-      sellPrice: sellPrice.toFixed(2),
-      profit: profit.toFixed(2),
-      marginPercent: marginPercent.toFixed(2),
-      roiPercent: roiPercent.toFixed(2),
-      feeAmount: fees.toFixed(2)
+      sellPrice: +sellPrice.toFixed(2),
+      profit: +profit.toFixed(2),
+      marginPercent: +marginPercent.toFixed(2),
+      roiPercent: +roiPercent.toFixed(2),
+      feeAmount: +feeAmount.toFixed(2),
     };
   }
 
-  const scenarios = {
-    conservative: calcProfit(breakEvenPrice * 1.08), // 8% margin
-    target: calcProfit(targetSell),
-    aggressive: calcProfit(targetSell * 1.15)
-  };
-
   res.json({
     ok: true,
-    market: market.code,
-    currency: market.currency,
+    market,
+    currency,
     inputs: {
       buyPrice,
       shippingCost,
       feePercent,
-      targetMarginPercent
+      targetMarginPercent,
     },
     totals: {
-      totalCost: totalCost.toFixed(2),
-      breakEvenPrice: breakEvenPrice.toFixed(2),
-      targetSell: targetSell.toFixed(2)
+      totalCost: +totalCost.toFixed(2),
+      breakEvenPrice: +breakEvenPrice.toFixed(2),
+      targetSell: +targetSell.toFixed(2),
     },
-    scenarios
+    scenarios: {
+      conservative: scenario(0.8),
+      target: scenario(1.0),
+      aggressive: scenario(1.15),
+    },
   });
 });
 
-/* -------------------------------------------------------------------------- */
-/* C) PRODUCT / NICHE SCORING ENGINE                                          */
-/* -------------------------------------------------------------------------- */
-/**
- * This is a “generic” scoring engine. It doesn’t call real eBay yet,
- * but it gives powerful structure:
- *
- * GET /api/engine/product-score?q=iphone+14+case&market=UK
- */
-router.get("/product-score", (req, res) => {
-  const q = (req.query.q || "").trim();
-  const market = resolveMarket(req.query.market);
+// ---------------------------------------------------------
+// 3) PRODUCT SCORE ENGINE
+// ---------------------------------------------------------
+// GET /api/engine/product-score?q=iphone+14+case&market=UK
 
-  if (!q) {
+router.get("/product-score", (req, res) => {
+  const rawQuery = (req.query.q || "").trim();
+  const market = (req.query.market || "UK").toUpperCase();
+  const currency = baseCurrency(market);
+
+  if (!rawQuery) {
     return res.status(400).json({
       ok: false,
-      error: "Missing q (keyword). Example: ?q=iphone+14+case&market=UK"
+      error: "Missing q (keyword). Example: ?q=iphone+case&market=UK",
     });
   }
 
-  const seed = hashString(q + "|" + market.code);
+  const seed = hashToSeed(rawQuery + "|" + market);
 
-  // Build scores from seed
-  const demandScore = clamp(scoreFrom(seed, 0.7), 10, 98);
-  const competitionScore = clamp(scoreFrom(seed * 3, 0.4), 5, 95);
-  const saturationScore = clamp(scoreFrom(seed * 7, 0.5), 5, 95);
+  const demandScore = makeScore(seed, 1, 20, 95);
+  const competitionScore = makeScore(seed, 2, 10, 90);
+  const saturationScore = makeScore(seed, 3, 10, 90);
 
-  // Higher opportunity when demand high, competition & saturation low
-  const opportunityScore = clamp(
-    Math.round(
-      demandScore * 0.5 +
-      (100 - competitionScore) * 0.25 +
-      (100 - saturationScore) * 0.25
-    ),
-    0,
-    100
+  // Higher demand + lower competition + lower saturation = better
+  const opportunityScore = Math.round(
+    (demandScore * 0.5 +
+      (100 - competitionScore) * 0.3 +
+      (100 - saturationScore) * 0.2)
   );
 
-  // Simple textual suggestion
-  let verdict;
-  if (opportunityScore >= 80) {
-    verdict = "Excellent – strong candidate for a winning product.";
-  } else if (opportunityScore >= 60) {
-    verdict = "Good – worth testing with 5–10 listings or variations.";
-  } else if (opportunityScore >= 40) {
-    verdict = "Average – only test if you have unique angle or bundle.";
-  } else {
-    verdict = "Weak – avoid unless you niche down further.";
-  }
+  let verdict = "Average – only test if you have unique angle or bundle.";
+  if (opportunityScore >= 70) verdict = "Strong – promising winner candidate.";
+  else if (opportunityScore >= 55)
+    verdict = "Decent – good to test with tight risk control.";
+  else if (opportunityScore <= 35)
+    verdict = "Weak – avoid unless you have something extremely unique.";
 
   res.json({
     ok: true,
-    query: q,
-    market: market.code,
-    currency: market.currency,
+    query: rawQuery,
+    market,
+    currency,
     scores: {
       demandScore,
       competitionScore,
       saturationScore,
-      opportunityScore
+      opportunityScore,
     },
-    verdict
+    verdict,
   });
 });
 
-/* -------------------------------------------------------------------------- */
-/* D) RISK / SATURATION HEATMAP FOR A KEYWORD                                 */
-/* -------------------------------------------------------------------------- */
-/**
- * GET /api/engine/risk-map?q=iphone+14+case&market=UK
- *
- * Returns “zones” of risk to help you decide how safe this niche is.
- */
-router.get("/risk-map", (req, res) => {
-  const q = (req.query.q || "").trim();
-  const market = resolveMarket(req.query.market);
+// ---------------------------------------------------------
+// 4) RISK MAP ENGINE
+// ---------------------------------------------------------
+// GET /api/engine/risk-map?q=wireless+earbuds&market=US
 
-  if (!q) {
+router.get("/risk-map", (req, res) => {
+  const rawQuery = (req.query.q || "").trim();
+  const market = (req.query.market || "US").toUpperCase();
+
+  if (!rawQuery) {
     return res.status(400).json({
       ok: false,
-      error: "Missing q (keyword). Example: ?q=iphone+14+case&market=UK"
+      error: "Missing q (keyword). Example: ?q=wireless+earbuds&market=US",
     });
   }
 
-  const seed = hashString("risk|" + q + "|" + market.code);
-  const baseRisk = clamp(scoreFrom(seed, 0.6), 5, 95);
+  const seed = hashToSeed(rawQuery + "|" + market);
 
-  const riskZones = [
+  const pricingRisk = makeScore(seed, 4, 20, 90);
+  const policyRisk = makeScore(seed, 5, 10, 80);
+  const returnsRisk = makeScore(seed, 6, 15, 95);
+  const supplyRisk = makeScore(seed, 7, 10, 85);
+
+  const averageRisk = Math.round(
+    (pricingRisk + policyRisk + returnsRisk + supplyRisk) / 4
+  );
+
+  const zones = [
     {
       zone: "pricing",
-      riskScore: clamp(baseRisk + (seed % 7) - 3, 0, 100),
-      note: "Discount wars & race-to-bottom pricing possible."
+      riskScore: pricingRisk,
+      note: "Discount wars & race-to-bottom pricing possible.",
     },
     {
       zone: "policy",
-      riskScore: clamp(baseRisk + ((seed >> 3) % 9) - 4, 0, 100),
-      note: "Watch for brand, copyright, or VERO issues."
+      riskScore: policyRisk,
+      note: "Watch for brand, copyright, or VERO issues.",
     },
     {
       zone: "returns",
-      riskScore: clamp(baseRisk + ((seed >> 6) % 11) - 5, 0, 100),
-      note: "Higher risk if product fragile or subjective (size, color, fit)."
+      riskScore: returnsRisk,
+      note: "Higher risk if product fragile or subjective (size, color, fit).",
     },
     {
       zone: "supply-chain",
-      riskScore: clamp(baseRisk + ((seed >> 9) % 13) - 6, 0, 100),
-      note: "Check stock stability with your suppliers."
-    }
+      riskScore: supplyRisk,
+      note: "Check stock stability with your suppliers.",
+    },
   ];
-
-  const avgRisk =
-    riskZones.reduce((sum, z) => sum + z.riskScore, 0) / riskZones.length;
 
   res.json({
     ok: true,
-    query: q,
-    market: market.code,
-    averageRisk: Math.round(avgRisk),
-    riskZones
+    query: rawQuery,
+    market,
+    averageRisk,
+    riskZones: zones,
   });
 });
 
-/* -------------------------------------------------------------------------- */
-/* E) DASHBOARD SUMMARY: WHAT TO WATCH TODAY                                  */
-/* -------------------------------------------------------------------------- */
-/**
- * GET /api/engine/dashboard?market=UK
- *
- * Simple high-level snapshot of:
- *  - hot keywords
- *  - risky areas
- *  - suggested actions
- */
-router.get("/dashboard", (req, res) => {
-  const market = resolveMarket(req.query.market);
-  const baseSeed = hashString("dashboard|" + market.code);
+// ---------------------------------------------------------
+// 5) MARKET DASHBOARD ENGINE
+// ---------------------------------------------------------
+// GET /api/engine/dashboard?market=UK
 
-  const hotKeywords = [
-    "water bottle",
-    "phone case",
-    "led strip lights",
-    "car organiser",
-    "wireless earbuds"
-  ].map((kw, idx) => {
-    const seed = baseSeed + idx * 137;
-    const opp = clamp(scoreFrom(seed, 0.65), 30, 100);
-    const demand = clamp(scoreFrom(seed * 2, 0.7), 30, 100);
-    const comp = clamp(scoreFrom(seed * 3, 0.4), 10, 95);
+router.get("/dashboard", (req, res) => {
+  const market = (req.query.market || "UK").toUpperCase();
+  const currency = baseCurrency(market);
+
+  // base niches (you can extend this list later)
+  const baseKeywords =
+    market === "US"
+      ? ["wireless earbuds", "air fryer", "phone case", "massage gun"]
+      : ["water bottle", "phone case", "led strip lights", "car organiser"];
+
+  const hotKeywords = baseKeywords.map((k) => {
+    const seed = hashToSeed(k + "|" + market);
+    const demandScore = makeScore(seed, 8, 25, 95);
+    const competitionScore = makeScore(seed, 9, 10, 90);
+    const opportunityScore = Math.round(
+      (demandScore * 0.55 + (100 - competitionScore) * 0.45)
+    );
 
     return {
-      keyword: kw,
-      demandScore: demand,
-      competitionScore: comp,
-      opportunityScore: opp
+      keyword: k,
+      demandScore,
+      competitionScore,
+      opportunityScore,
     };
   });
 
   const overallOpportunity = Math.round(
-    hotKeywords.reduce((sum, k) => sum + k.opportunityScore, 0) /
+    hotKeywords.reduce((acc, k) => acc + k.opportunityScore, 0) /
       hotKeywords.length
   );
 
-  const actions = [];
-
-  if (overallOpportunity >= 70) {
-    actions.push(
-      "Increase testing budget for 3–5 hot products in " + market.code
-    );
-  } else if (overallOpportunity >= 50) {
-    actions.push("Test 2–3 products with small daily budget.");
-  } else {
-    actions.push("Focus on research – overall market looks crowded.");
-  }
-
-  actions.push(
-    "Use profit calculator + auto-price to confirm at least 25–35% net ROI before listing."
-  );
-  actions.push(
-    "Use risk-map on each main keyword to avoid policy & return headaches."
-  );
+  const actions = [
+    "Focus on research – overall market looks crowded.",
+    "Use profit calculator + auto-price to confirm at least 25–35% net ROI before listing.",
+    "Use risk-map on each main keyword to avoid policy & return headaches.",
+  ];
 
   res.json({
     ok: true,
-    market: market.code,
-    currency: market.currency,
+    market,
+    currency,
     overallOpportunity,
     hotKeywords,
-    actions
+    actions,
   });
 });
+
+// ---------------------------------------------------------
+// 6) UPGRADE A – MARKET SWEEPER
+// ---------------------------------------------------------
+// GET /api/engine/sweep?market=UK
+// Optional: &keywords=iphone+case,air+fryer,usb+hub
+
+router.get("/sweep", (req, res) => {
+  const market = (req.query.market || "UK").toUpperCase();
+  const currency = baseCurrency(market);
+
+  let keywords = [];
+  if (req.query.keywords) {
+    keywords = req.query.keywords
+      .split(",")
+      .map((k) => k.trim())
+      .filter(Boolean);
+  }
+
+  // Default scan set if user didn't provide keywords
+  if (keywords.length === 0) {
+    keywords =
+      market === "US"
+        ? [
+            "wireless earbuds",
+            "air fryer",
+            "portable blender",
+            "iphone case",
+            "gaming mouse",
+            "rgb keyboard",
+          ]
+        : [
+            "water bottle",
+            "phone holder",
+            "car organiser",
+            "led strip lights",
+            "desk lamp",
+            "usb hub",
+          ];
+  }
+
+  const results = keywords.map((kw) => {
+    const seed = hashToSeed(kw + "|" + market);
+    const demandScore = makeScore(seed, 11, 20, 95);
+    const competitionScore = makeScore(seed, 12, 10, 90);
+    const saturationScore = makeScore(seed, 13, 10, 90);
+    const opportunityScore = Math.round(
+      (demandScore * 0.5 +
+        (100 - competitionScore) * 0.3 +
+        (100 - saturationScore) * 0.2)
+    );
+
+    let tier = "C";
+    if (opportunityScore >= 75) tier = "A";
+    else if (opportunityScore >= 55) tier = "B";
+
+    return {
+      keyword: kw,
+      demandScore,
+      competitionScore,
+      saturationScore,
+      opportunityScore,
+      tier,
+    };
+  });
+
+  // Sort by opportunity, highest first
+  results.sort((a, b) => b.opportunityScore - a.opportunityScore);
+
+  res.json({
+    ok: true,
+    market,
+    currency,
+    scannedKeywords: results.length,
+    winnersTop3: results.slice(0, 3),
+    fullScan: results,
+  });
+});
+
+// ---------------------------------------------------------
+// 7) UPGRADE A – DAILY WINNER PLAN
+// ---------------------------------------------------------
+// GET /api/engine/daily-plan?market=UK&budget=200
+
+router.get("/daily-plan", (req, res) => {
+  const market = (req.query.market || "UK").toUpperCase();
+  const currency = baseCurrency(market);
+  const budget = num(req.query.budget, 200);
+
+  // Reuse sweep engine's default keywords
+  const defaultReq = {
+    query: { market },
+  };
+
+  // Manually call the sweep logic (without HTTP round-trip)
+  let keywords =
+    market === "US"
+      ? [
+          "wireless earbuds",
+          "air fryer",
+          "portable blender",
+          "iphone case",
+          "gaming mouse",
+          "rgb keyboard",
+        ]
+      : [
+          "water bottle",
+          "phone holder",
+          "car organiser",
+          "led strip lights",
+          "desk lamp",
+          "usb hub",
+        ];
+
+  const items = keywords.map((kw) => {
+    const seed = hashToSeed(kw + "|" + market);
+    const demandScore = makeScore(seed, 21, 20, 95);
+    const competitionScore = makeScore(seed, 22, 10, 90);
+    const saturationScore = makeScore(seed, 23, 10, 90);
+    const opportunityScore = Math.round(
+      (demandScore * 0.5 +
+        (100 - competitionScore) * 0.3 +
+        (100 - saturationScore) * 0.2)
+    );
+
+    return {
+      keyword: kw,
+      demandScore,
+      competitionScore,
+      saturationScore,
+      opportunityScore,
+    };
+  });
+
+  items.sort((a, b) => b.opportunityScore - a.opportunityScore);
+
+  const tierA = items.filter((i) => i.opportunityScore >= 75).slice(0, 3);
+  const tierB = items.filter(
+    (i) => i.opportunityScore >= 55 && i.opportunityScore < 75
+  );
+
+  const listingTargets = {
+    highPriority: tierA.map((i) => i.keyword),
+    testBucket: tierB.slice(0, 5).map((i) => i.keyword),
+  };
+
+  const budgetPerA = tierA.length ? budget * 0.7 / tierA.length : 0;
+  const budgetPerB = tierB.length ? budget * 0.3 / tierB.length : 0;
+
+  const actions = [
+    "Source Tier A products from Amazon / suppliers with at least 35–50% ROI using reverse-sourcing.",
+    "Use auto-price to create conservative, target, and aggressive offers for each Tier A item.",
+    "For Tier B products, list with low risk budget and watch performance for 3–7 days.",
+    "Avoid new products with low opportunity score unless they support bundles for Tier A items.",
+  ];
+
+  res.json({
+    ok: true,
+    market,
+    currency,
+    dailyBudget: budget,
+    listingTargets,
+    budgetPlan: {
+      total: budget,
+      tierAAllocated: + (budget * 0.7).toFixed(2),
+      tierBAllocated: + (budget * 0.3).toFixed(2),
+      approxBudgetPerTierA: +budgetPerA.toFixed(2),
+      approxBudgetPerTierB: +budgetPerB.toFixed(2),
+    },
+    rawScores: items,
+    actions,
+  });
+});
+
+// ---------------------------------------------------------
+// 8) UPGRADE A – ALERT / RADAR ENGINE
+// ---------------------------------------------------------
+// GET /api/engine/alerts?market=UK
+
+router.get("/alerts", (req, res) => {
+  const market = (req.query.market || "UK").toUpperCase();
+  const currency = baseCurrency(market);
+
+  // Simple deterministic seed from date + market
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const seed = hashToSeed(today + "|" + market);
+
+  const saturationPressure = makeScore(seed, 31, 10, 95);
+  const marginPressure = makeScore(seed, 32, 10, 95);
+  const policyPressure = makeScore(seed, 33, 10, 95);
+
+  const alerts = [];
+
+  if (saturationPressure > 70) {
+    alerts.push(
+      "Saturation warning: reduce new generic listings – focus on unique bundles and accessories."
+    );
+  }
+
+  if (marginPressure > 65) {
+    alerts.push(
+      "Margin pressure: review pricing on top 10 sellers and use auto-price to protect profit."
+    );
+  }
+
+  if (policyPressure > 60) {
+    alerts.push(
+      "Policy attention: double-check keywords for trademarks / VERO before launching new items."
+    );
+  }
+
+  if (alerts.length === 0) {
+    alerts.push(
+      "No critical alerts – continue scaling Tier A winners and testing Tier B candidates."
+    );
+  }
+
+  res.json({
+    ok: true,
+    date: today,
+    market,
+    currency,
+    saturationPressure,
+    marginPressure,
+    policyPressure,
+    alerts,
+  });
+});
+
+// ---------------------------------------------------------
+// EXPORT ROUTER
+// ---------------------------------------------------------
 
 module.exports = router;
