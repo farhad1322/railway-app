@@ -12,6 +12,24 @@ try { ({ LRUCache: LRU } = require("lru-cache")); } catch (e) { LRU = null; }
 const cache = LRU ? new LRU({ max: 500, ttl: 1000 * 60 * 60 }) : null;
 
 // FAST + PROFIT SAFE LIMITS
+// ---- AI Upscaler SAFE TOGGLE (OFF by default) ----
+// Enable only if ?ai=on is passed
+
+function isAiEnabled(req) {
+  return String(req.query.ai || "").toLowerCase() === "on";
+}
+
+// SAFE placeholder for AI upscale (no edits, no policy risk)
+// Real AI can be plugged later without changing API
+async function safeAiUpscale(imageUrl) {
+  return {
+    enabled: true,
+    mode: "safe-2x",
+    message: "AI upscaling simulated (policy-safe, no content change)",
+    outputUrl: imageUrl
+  };
+}
+
 const FETCH_TIMEOUT_MS = 4500;
 const MAX_BYTES = 4 * 1024 * 1024;
 const UPSCALE_MAX = 1.8;
