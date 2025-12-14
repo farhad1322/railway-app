@@ -653,6 +653,7 @@ router.get("/safety/sanitize", (req, res) => {
 });
 router.use("/image-guard", require("./imageGuard"));
 router.use("/images", require("./imagesPipeline"));
+router.use("/winners", require("./winnerScoring"));
 
 /* ------------------------- Export ------------------------- */
 module.exports = router;
