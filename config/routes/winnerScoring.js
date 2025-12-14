@@ -1,6 +1,14 @@
 // config/routes/winnerScoring.js
 const express = require("express");
 const router = express.Router();
+// TEST endpoint (health check for winner engine)
+router.get("/test", (req, res) => {
+  res.json({
+    ok: true,
+    message: "Winner scoring engine is alive",
+    timestamp: new Date().toISOString()
+  });
+});
 
 /**
  * Winner Scoring Engine (fast reject + scoring)
