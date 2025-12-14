@@ -258,5 +258,35 @@ router.post("/score", (req, res) => {
     note: result.pass ? "Winner ✅ (send to AutoDS queue)" : "Not a winner (keep scanning)"
   });
 });
+// 🔎 Browser test endpoint (NO Postman needed)
+router.get("/score-test", (req, res) => {
+  const product = {
+    price: Number(req.query.price || 18.99),
+    sellPrice: Number(req.query.sellPrice || 39.99),
+    shippingCost: Number(req.query.shippingCost || 3.5),
+    rating: Number(req.query.rating || 4.5),
+    reviews: Number(req.query.reviews || 1200),
+    shippingDays: Number(req.query.shippingDays || 7),
+    stock: Number(req.query.stock || 50),
+    supplier: req.query.supplier || "amazon"
+  };
+
+  const fastReasons = fastReject(product, DEFAULTS);
+  if (fastReasons.length > 0) {
+    return res.json({
+      ok: true,
+      pass: false,
+      tier: "REJECT",
+      score: 0,
+      reasons: fastReasons
+    });
+  }
+
+  const result = scoreProduct(product, DEFAULTS);
+  res.json({
+    ok: true,
+    ...result
+  });
+});
 
 module.exports = router;
