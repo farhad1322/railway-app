@@ -652,6 +652,7 @@ router.get("/safety/sanitize", (req, res) => {
   });
 });
 router.use("/image-guard", require("./imageGuard"));
+router.use("/images", require("./imagesPipeline"));
 
 /* ------------------------- Export ------------------------- */
 module.exports = router;
