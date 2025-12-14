@@ -4,12 +4,12 @@ const router = express.Router();
 
 /**
  * AutoDS BULK CSV Export
- * - Accepts ONLY winner products (A/B)
- * - Exports 50–150 products per CSV
- * - AutoDS-ready format
+ * - Accepts ONLY winner products
+ * - Exports 50–150 products at once
+ * - AutoDS-ready CSV
  */
 
-// ---------- CSV HEADER (AutoDS compatible) ----------
+// ---------- CSV HEADER ----------
 const CSV_HEADER = [
   "Title",
   "Supplier URL",
@@ -22,13 +22,12 @@ const CSV_HEADER = [
 ].join(",");
 
 // ---------- HELPERS ----------
-function csvEscape(value) {
-  if (value === null || value === undefined) return "";
-  const s = String(value).replace(/"/g, '""');
-  return `"${s}"`;
+function csvEscape(v) {
+  if (v === null || v === undefined) return "";
+  return `"${String(v).replace(/"/g, '""')}"`;
 }
 
-// ---------- HEALTH CHECK ----------
+// ---------- HEALTH ----------
 router.get("/ping", (req, res) => {
   res.json({
     ok: true,
@@ -37,96 +36,40 @@ router.get("/ping", (req, res) => {
   });
 });
 
-// ---------- BULK EXPORT ----------
-/**
- * POST /api/engine/autods/export
- * Body: { winners: [ ...products ] }
- */
-router.post("/export", (req, res) => {
-  const winners = Array.isArray(req.body?.winners) ? req.body.winners : [];
+// ---------- BULK EXPORT (Browser test) ----------
+router.get("/export-test", (req, res) => {
+  // Simulated WINNER batch (normally comes from DB / scoring engine)
+  const winners = Array.from({ length: 50 }).map((_, i) => ({
+    title: `Winner Product ${i + 1}`,
+    supplierUrl: "https://www.amazon.com/dp/TEST123",
+    cost: 18.99,
+    price: 39.99,
+    quantity: 50,
+    images: 5,
+    shippingDays: 6,
+    notes: "Winner A – approved"
+  }));
 
-  if (winners.length === 0) {
-    return res.status(400).json({
-      ok: false,
-      error: "No winner products provided"
-    });
-  }
-
-  if (winners.length > 150) {
-    return res.status(400).json({
-      ok: false,
-      error: "Max 150 products per CSV for safe AutoDS import"
-    });
-  }
-
-  const rows = winners.map((p, index) => {
-    if (!p.title || !p.supplierUrl || !p.cost || !p.price) {
-      throw new Error(`Invalid product at index ${index}`);
-    }
-
-    return [
+  const rows = winners.map(p =>
+    [
       csvEscape(p.title),
       csvEscape(p.supplierUrl),
       p.cost,
       p.price,
-      p.quantity || 50,
-      p.imagesCount || 3,
-      p.shippingDays || 7,
-      csvEscape(p.notes || "Winner – Auto approved")
-    ].join(",");
-  });
+      p.quantity,
+      p.images,
+      p.shippingDays,
+      csvEscape(p.notes)
+    ].join(",")
+  );
 
   const csv = `${CSV_HEADER}\n${rows.join("\n")}`;
 
   res.setHeader("Content-Type", "text/csv");
   res.setHeader(
     "Content-Disposition",
-    `attachment; filename=autods_winners_${Date.now()}.csv`
+    "attachment; filename=autods_bulk_winners.csv"
   );
-
-  res.send(csv);
-});
-
-// ---------- BROWSER TEST (NO POSTMAN) ----------
-router.get("/export-test", (req, res) => {
-  const demoWinners = [
-    {
-      title: "Wireless Bluetooth Headphones Noise Cancelling",
-      supplierUrl: "https://www.amazon.com/dp/B0TEST123",
-      cost: 18.99,
-      price: 39.99,
-      quantity: 50,
-      imagesCount: 5,
-      shippingDays: 6,
-      notes: "Tier A – High ROI"
-    },
-    {
-      title: "Smart LED Strip Lights RGB App Control",
-      supplierUrl: "https://www.aliexpress.com/item/100500TEST",
-      cost: 9.5,
-      price: 24.99,
-      quantity: 80,
-      imagesCount: 4,
-      shippingDays: 8,
-      notes: "Tier B – Stable seller"
-    }
-  ];
-
-  const rows = demoWinners.map(p => [
-    csvEscape(p.title),
-    csvEscape(p.supplierUrl),
-    p.cost,
-    p.price,
-    p.quantity,
-    p.imagesCount,
-    p.shippingDays,
-    csvEscape(p.notes)
-  ].join(","));
-
-  const csv = `${CSV_HEADER}\n${rows.join("\n")}`;
-
-  res.setHeader("Content-Type", "text/csv");
-  res.setHeader("Content-Disposition", "attachment; filename=autods_bulk_test.csv");
   res.send(csv);
 });
 
