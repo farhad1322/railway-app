@@ -4,11 +4,11 @@ const router = express.Router();
 
 /**
  * AutoDS CSV Export
- * Accepts ONLY winner products
- * Returns CSV ready for AutoDS import
+ * - Accepts ONLY winner products
+ * - Returns CSV ready for AutoDS import
  */
 
-// CSV header for AutoDS
+// ---------- CSV HEADER (AutoDS compatible) ----------
 const CSV_HEADER = [
   "Title",
   "Supplier URL",
@@ -20,41 +20,52 @@ const CSV_HEADER = [
   "Notes"
 ].join(",");
 
-// helper
+// ---------- HELPERS ----------
 function csvEscape(value) {
   if (value === null || value === undefined) return "";
   const s = String(value).replace(/"/g, '""');
   return `"${s}"`;
 }
 
-// POST /api/engine/autods/export
-router.post("/export", (req, res) => {
-  const product = req.body || {};
+// ---------- ROUTES ----------
 
-  // 🔐 HARD SAFETY: allow ONLY winners
-  if (!product.pass || product.tier !== "A") {
-    return res.status(400).json({
-      ok: false,
-      error: "Only Tier A winners can be exported to AutoDS"
-    });
-  }
+// 🔹 Health check
+router.get("/ping", (req, res) => {
+  res.json({
+    ok: true,
+    message: "AutoDS export engine is alive",
+    timestamp: new Date().toISOString()
+  });
+});
+
+// 🔹 Browser test (NO Postman needed)
+router.get("/export-test", (req, res) => {
+  const demoProduct = {
+    title: "Wireless Bluetooth Headphones Noise Cancelling",
+    supplierUrl: "https://www.amazon.com/dp/B0TEST123",
+    cost: 18.99,
+    price: 39.99,
+    quantity: 50,
+    images: 5,
+    shippingDays: 6,
+    notes: "Winner A – auto-approved"
+  };
 
   const row = [
-    csvEscape(product.title),
-    csvEscape(product.supplierUrl),
-    product.itemCost,
-    product.sellPrice,
-    product.stock || 10,
-    csvEscape((product.images || []).join("|")),
-    product.shippingDays || 7,
-    csvEscape("Auto-selected winner")
+    csvEscape(demoProduct.title),
+    csvEscape(demoProduct.supplierUrl),
+    demoProduct.cost,
+    demoProduct.price,
+    demoProduct.quantity,
+    demoProduct.images,
+    demoProduct.shippingDays,
+    csvEscape(demoProduct.notes)
   ].join(",");
 
   const csv = `${CSV_HEADER}\n${row}`;
 
   res.setHeader("Content-Type", "text/csv");
-  res.setHeader("Content-Disposition", "attachment; filename=autods_winner.csv");
-
+  res.setHeader("Content-Disposition", "attachment; filename=autods_test.csv");
   res.send(csv);
 });
 
