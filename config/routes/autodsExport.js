@@ -1,16 +1,9 @@
 // config/routes/autodsExport.js
 const express = require("express");
 const router = express.Router();
+const winnerStore = require("./winnerStore");
 
-// ✅ CONNECT WINNER STORE
-const {
-  getWinners,
-  clearWinners
-} = require("./winnerStore");
-
-/* =========================
-   CSV HEADER (AutoDS READY)
-========================= */
+// ---------- CSV HEADER ----------
 const CSV_HEADER = [
   "Title",
   "Supplier URL",
@@ -22,17 +15,12 @@ const CSV_HEADER = [
   "Notes"
 ].join(",");
 
-/* =========================
-   HELPERS
-========================= */
-function csvEscape(value) {
-  if (value === null || value === undefined) return "";
-  return `"${String(value).replace(/"/g, '""')}"`;
+function csvEscape(v) {
+  if (v === null || v === undefined) return "";
+  return `"${String(v).replace(/"/g, '""')}"`;
 }
 
-/* =========================
-   HEALTH CHECK
-========================= */
+// 🔹 Health check
 router.get("/ping", (req, res) => {
   res.json({
     ok: true,
@@ -41,37 +29,31 @@ router.get("/ping", (req, res) => {
   });
 });
 
-/* =========================
-   EXPORT REAL WINNERS (CSV)
-========================= */
+// 🔹 REAL BULK EXPORT
 router.get("/export-winners", (req, res) => {
-  const winners = getWinners();
+  const winners = winnerStore.getWinners();
 
   if (!winners.length) {
     return res.status(400).json({
       ok: false,
-      message: "No winners available for export"
+      message: "No winners available to export"
     });
   }
 
-  // 🔒 AutoDS safe batch size
-  const batch = winners.slice(0, 150);
-
-  const rows = batch.map(p => [
-    csvEscape(p.title),
-    csvEscape(p.supplierUrl || ""),
-    p.itemCost,
-    p.sellPrice,
-    50, // default quantity
-    p.imagesCount || 5,
-    p.deliveryDays || 7,
-    csvEscape(`Winner ${p.tier} | Score ${p.score}`)
-  ].join(","));
+  const rows = winners.map(p =>
+    [
+      csvEscape(p.title),
+      csvEscape(p.supplierUrl),
+      p.cost,
+      p.price,
+      p.quantity,
+      p.images,
+      p.shippingDays,
+      csvEscape(p.notes)
+    ].join(",")
+  );
 
   const csv = `${CSV_HEADER}\n${rows.join("\n")}`;
-
-  // 🔥 CLEAR winners after export (VERY IMPORTANT)
-  clearWinners();
 
   res.setHeader("Content-Type", "text/csv");
   res.setHeader(
@@ -79,21 +61,8 @@ router.get("/export-winners", (req, res) => {
     `attachment; filename=autods_winners_${Date.now()}.csv`
   );
 
-  res.send(csv);
-});
-
-/* =========================
-   BROWSER DEMO TEST
-========================= */
-router.get("/export-test", (req, res) => {
-  const csv = `${CSV_HEADER}
-"Demo Product","https://amazon.com",18.99,39.99,50,5,6,"Demo Winner A"`;
-
-  res.setHeader("Content-Type", "text/csv");
-  res.setHeader(
-    "Content-Disposition",
-    "attachment; filename=autods_test.csv"
-  );
+  // Optional: clear after export
+  winnerStore.clearWinners();
 
   res.send(csv);
 });
