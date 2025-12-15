@@ -2,6 +2,13 @@
 const express = require("express");
 const router = express.Router();
 
+// ✅ CONNECT WINNER STORE (IMPORTANT)
+const {
+  addWinner,
+  getWinners,
+  clearWinners
+} = require("./winnerStore");
+
 /* =======================
    HEALTH / TEST ENDPOINT
 ======================= */
@@ -68,12 +75,21 @@ function calcProfit({ sellPrice, itemCost, shipCost, feeRate, bufferRate }) {
 function fastReject(product, cfg) {
   const reasons = [];
 
-  if (!product.title || product.title.length < 6) reasons.push("Missing/weak title");
-  if (!product.supplier) reasons.push("Missing supplier");
-  if (product.inStock === false) reasons.push("Out of stock");
+  if (!product.title || product.title.length < 6)
+    reasons.push("Missing/weak title");
 
-  if (product.deliveryDays && product.deliveryDays > cfg.maxDeliveryDays)
+  if (!product.supplier)
+    reasons.push("Missing supplier");
+
+  if (product.inStock === false)
+    reasons.push("Out of stock");
+
+  if (
+    product.deliveryDays &&
+    product.deliveryDays > cfg.maxDeliveryDays
+  ) {
     reasons.push(`Delivery too slow (${product.deliveryDays}d)`);
+  }
 
   const hay = `${product.title} ${product.brand || ""} ${product.category || ""}`.toLowerCase();
   for (const kw of cfg.riskKeywords) {
@@ -106,15 +122,22 @@ function scoreProduct(product, cfg) {
     bufferRate: cfg.bufferRate
   });
 
-  if (netProfit < cfg.minNetProfit) reasons.push("Low net profit");
-  if (roi < cfg.minROI) reasons.push("Low ROI");
+  if (netProfit < cfg.minNetProfit)
+    reasons.push("Low net profit");
 
-  if (product.rating && product.rating < cfg.minRating) reasons.push("Low rating");
-  if (product.reviews && product.reviews < cfg.minReviews) reasons.push("Low reviews");
+  if (roi < cfg.minROI)
+    reasons.push("Low ROI");
+
+  if (product.rating && product.rating < cfg.minRating)
+    reasons.push("Low rating");
+
+  if (product.reviews && product.reviews < cfg.minReviews)
+    reasons.push("Low reviews");
 
   const profitScore = clamp((netProfit / (cfg.minNetProfit * 2)) * 100, 0, 100);
   const roiScore = clamp((roi / (cfg.minROI * 2)) * 100, 0, 100);
-  const deliveryScore = product.deliveryDays <= cfg.preferDeliveryDays ? 100 : 70;
+  const deliveryScore =
+    product.deliveryDays <= cfg.preferDeliveryDays ? 100 : 70;
   const qualityScore = clamp(((product.rating || 4) - 3.5) * 60, 0, 100);
 
   const finalScore = Math.round(
@@ -124,7 +147,10 @@ function scoreProduct(product, cfg) {
     qualityScore * 0.2
   );
 
-  const tier = finalScore >= 85 ? "A" : finalScore >= 75 ? "B" : "C";
+  const tier =
+    finalScore >= 85 ? "A" :
+    finalScore >= 75 ? "B" : "C";
+
   const pass = reasons.length === 0 && (tier === "A" || tier === "B");
 
   return {
@@ -143,15 +169,40 @@ function scoreProduct(product, cfg) {
    POST (REAL USE)
 ======================= */
 router.post("/score", (req, res) => {
-  const cfg = { ...DEFAULTS };
   const product = req.body || {};
+  const cfg = { ...DEFAULTS };
 
   const fast = fastReject(product, cfg);
   if (fast.length) {
-    return res.json({ ok: true, pass: false, tier: "REJECT", score: 0, reasons: fast });
+    return res.json({
+      ok: true,
+      pass: false,
+      tier: "REJECT",
+      score: 0,
+      reasons: fast
+    });
   }
 
   const result = scoreProduct(product, cfg);
+
+  // ✅ STORE WINNERS (CRITICAL STEP)
+  if (result.pass) {
+    addWinner({
+      title: product.title,
+      supplier: product.supplier,
+      supplierUrl: product.supplierUrl || "",
+      itemCost: product.itemCost,
+      sellPrice: product.sellPrice,
+      shippingCost: product.shippingCost,
+      deliveryDays: product.deliveryDays,
+      imagesCount: product.images.length,
+      rating: product.rating,
+      reviews: product.reviews,
+      score: result.score,
+      tier: result.tier
+    });
+  }
+
   res.json({ ok: true, ...result });
 });
 
@@ -162,22 +213,35 @@ router.get("/score-test", (req, res) => {
   const product = {
     title: req.query.title || "Wireless Bluetooth Headphones Noise Cancelling",
     supplier: req.query.supplier || "amazon",
+    supplierUrl: req.query.supplierUrl || "https://amazon.com",
     itemCost: toNumber(req.query.itemCost || 18.99),
     sellPrice: toNumber(req.query.sellPrice || 39.99),
     shippingCost: toNumber(req.query.shippingCost || 3.5),
     rating: toNumber(req.query.rating || 4.6),
     reviews: toNumber(req.query.reviews || 1500),
     deliveryDays: toNumber(req.query.shippingDays || 6),
-    stock: toNumber(req.query.stock || 80),
+    inStock: true,
     images: new Array(toNumber(req.query.imagesCount || 5)).fill("img")
   };
 
   const fast = fastReject(product, DEFAULTS);
   if (fast.length) {
-    return res.json({ ok: true, pass: false, tier: "REJECT", score: 0, reasons: fast });
+    return res.json({
+      ok: true,
+      pass: false,
+      tier: "REJECT",
+      score: 0,
+      reasons: fast
+    });
   }
 
   const result = scoreProduct(product, DEFAULTS);
+
+  // ✅ STORE TEST WINNERS TOO
+  if (result.pass) {
+    addWinner(product);
+  }
+
   res.json({ ok: true, ...result });
 });
 
