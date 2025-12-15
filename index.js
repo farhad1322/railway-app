@@ -1,4 +1,3 @@
-// require("./config/cron/autodsDailyExport");
 // index.js – main Express app for your eBay automation backend
 
 const express = require("express");
@@ -36,22 +35,22 @@ app.get("/", (req, res) => {
 // ----------------------
 app.use("/api/ebay", ebayRouter);
 app.use("/api/engine", engineRouter);
-// 🔍 Full system health check
+
+// ----------------------
+// Health checks
+// ----------------------
+app.get("/health", (req, res) => {
+  res.json({ ok: true });
+});
+
 app.get("/health/full", (req, res) => {
   res.json({
     ok: true,
     server: "up",
     ebayRouter: "mounted",
     engineRouter: "mounted",
-    imageGuard: "mounted",
-    imagesPipeline: "mounted",
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
-});
-
-// Simple health check for Railway
-app.get("/health", (req, res) => {
-  res.json({ ok: true });
 });
 
 // ----------------------
