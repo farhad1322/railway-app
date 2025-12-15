@@ -2,14 +2,15 @@
 const express = require("express");
 const router = express.Router();
 
-/**
- * AutoDS BULK CSV Export
- * - Accepts ONLY winner products
- * - Exports 50–150 products at once
- * - AutoDS-ready CSV
- */
+// ✅ CONNECT WINNER STORE
+const {
+  getWinners,
+  clearWinners
+} = require("./winnerStore");
 
-// ---------- CSV HEADER ----------
+/* =========================
+   CSV HEADER (AutoDS READY)
+========================= */
 const CSV_HEADER = [
   "Title",
   "Supplier URL",
@@ -21,13 +22,17 @@ const CSV_HEADER = [
   "Notes"
 ].join(",");
 
-// ---------- HELPERS ----------
-function csvEscape(v) {
-  if (v === null || v === undefined) return "";
-  return `"${String(v).replace(/"/g, '""')}"`;
+/* =========================
+   HELPERS
+========================= */
+function csvEscape(value) {
+  if (value === null || value === undefined) return "";
+  return `"${String(value).replace(/"/g, '""')}"`;
 }
 
-// ---------- HEALTH ----------
+/* =========================
+   HEALTH CHECK
+========================= */
 router.get("/ping", (req, res) => {
   res.json({
     ok: true,
@@ -36,40 +41,60 @@ router.get("/ping", (req, res) => {
   });
 });
 
-// ---------- BULK EXPORT (Browser test) ----------
-router.get("/export-test", (req, res) => {
-  // Simulated WINNER batch (normally comes from DB / scoring engine)
-  const winners = Array.from({ length: 50 }).map((_, i) => ({
-    title: `Winner Product ${i + 1}`,
-    supplierUrl: "https://www.amazon.com/dp/TEST123",
-    cost: 18.99,
-    price: 39.99,
-    quantity: 50,
-    images: 5,
-    shippingDays: 6,
-    notes: "Winner A – approved"
-  }));
+/* =========================
+   EXPORT REAL WINNERS (CSV)
+========================= */
+router.get("/export-winners", (req, res) => {
+  const winners = getWinners();
 
-  const rows = winners.map(p =>
-    [
-      csvEscape(p.title),
-      csvEscape(p.supplierUrl),
-      p.cost,
-      p.price,
-      p.quantity,
-      p.images,
-      p.shippingDays,
-      csvEscape(p.notes)
-    ].join(",")
-  );
+  if (!winners.length) {
+    return res.status(400).json({
+      ok: false,
+      message: "No winners available for export"
+    });
+  }
+
+  // 🔒 AutoDS safe batch size
+  const batch = winners.slice(0, 150);
+
+  const rows = batch.map(p => [
+    csvEscape(p.title),
+    csvEscape(p.supplierUrl || ""),
+    p.itemCost,
+    p.sellPrice,
+    50, // default quantity
+    p.imagesCount || 5,
+    p.deliveryDays || 7,
+    csvEscape(`Winner ${p.tier} | Score ${p.score}`)
+  ].join(","));
 
   const csv = `${CSV_HEADER}\n${rows.join("\n")}`;
+
+  // 🔥 CLEAR winners after export (VERY IMPORTANT)
+  clearWinners();
 
   res.setHeader("Content-Type", "text/csv");
   res.setHeader(
     "Content-Disposition",
-    "attachment; filename=autods_bulk_winners.csv"
+    `attachment; filename=autods_winners_${Date.now()}.csv`
   );
+
+  res.send(csv);
+});
+
+/* =========================
+   BROWSER DEMO TEST
+========================= */
+router.get("/export-test", (req, res) => {
+  const csv = `${CSV_HEADER}
+"Demo Product","https://amazon.com",18.99,39.99,50,5,6,"Demo Winner A"`;
+
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader(
+    "Content-Disposition",
+    "attachment; filename=autods_test.csv"
+  );
+
   res.send(csv);
 });
 
