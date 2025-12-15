@@ -37,7 +37,7 @@ app.use("/api/ebay", ebayRouter);
 app.use("/api/engine", engineRouter);
 
 // ----------------------
-// Health checks
+// Health checks (Railway-safe)
 // ----------------------
 app.get("/health", (req, res) => {
   res.json({ ok: true });
@@ -60,4 +60,4 @@ app.listen(PORT, () => {
   console.log(`Backend server listening on port ${PORT}`);
 });
 
-module.exports = app;
+// DO NOT export app when using app.listen on Railway
