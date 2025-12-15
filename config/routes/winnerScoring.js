@@ -2,15 +2,11 @@
 const express = require("express");
 const router = express.Router();
 
-// ✅ CONNECT WINNER STORE (IMPORTANT)
-const {
-  addWinner,
-  getWinners,
-  clearWinners
-} = require("./winnerStore");
+// ✅ CONNECT WINNER STORE
+const { addWinner } = require("./winnerStore");
 
 /* =======================
-   HEALTH / TEST ENDPOINT
+   HEALTH / TEST
 ======================= */
 router.get("/test", (req, res) => {
   res.json({
@@ -38,8 +34,6 @@ const DEFAULTS = {
   minRating: 4.2,
   minReviews: 50,
 
-  maxCompetition: 0.85,
-
   riskKeywords: [
     "nike","adidas","apple","sony","samsung","dyson",
     "gucci","louis vuitton","rolex",
@@ -56,7 +50,6 @@ const toNumber = (x, f = 0) => {
   return Number.isFinite(n) ? n : f;
 };
 
-const safeLower = (s) => String(s || "").toLowerCase();
 const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
 
 function calcProfit({ sellPrice, itemCost, shipCost, feeRate, bufferRate }) {
@@ -78,32 +71,28 @@ function fastReject(product, cfg) {
   if (!product.title || product.title.length < 6)
     reasons.push("Missing/weak title");
 
-  if (!product.supplier)
-    reasons.push("Missing supplier");
+  if (!product.supplierUrl)
+    reasons.push("Missing supplier URL");
 
   if (product.inStock === false)
     reasons.push("Out of stock");
 
-  if (
-    product.deliveryDays &&
-    product.deliveryDays > cfg.maxDeliveryDays
-  ) {
+  if (product.deliveryDays > cfg.maxDeliveryDays)
     reasons.push(`Delivery too slow (${product.deliveryDays}d)`);
-  }
 
-  const hay = `${product.title} ${product.brand || ""} ${product.category || ""}`.toLowerCase();
+  const hay = `${product.title}`.toLowerCase();
   for (const kw of cfg.riskKeywords) {
     if (hay.includes(kw)) {
-      reasons.push(`Risk keyword detected: "${kw}"`);
+      reasons.push(`Risk keyword detected: ${kw}`);
       break;
     }
   }
 
   if (!product.itemCost || product.itemCost <= 0)
-    reasons.push("Missing/invalid itemCost");
+    reasons.push("Invalid item cost");
 
   if (!Array.isArray(product.images) || product.images.length < 2)
-    reasons.push("Not enough images (<2)");
+    reasons.push("Not enough images");
 
   return reasons;
 }
@@ -122,51 +111,42 @@ function scoreProduct(product, cfg) {
     bufferRate: cfg.bufferRate
   });
 
-  if (netProfit < cfg.minNetProfit)
-    reasons.push("Low net profit");
-
-  if (roi < cfg.minROI)
-    reasons.push("Low ROI");
-
-  if (product.rating && product.rating < cfg.minRating)
-    reasons.push("Low rating");
-
-  if (product.reviews && product.reviews < cfg.minReviews)
-    reasons.push("Low reviews");
+  if (netProfit < cfg.minNetProfit) reasons.push("Low net profit");
+  if (roi < cfg.minROI) reasons.push("Low ROI");
+  if (product.rating < cfg.minRating) reasons.push("Low rating");
+  if (product.reviews < cfg.minReviews) reasons.push("Low reviews");
 
   const profitScore = clamp((netProfit / (cfg.minNetProfit * 2)) * 100, 0, 100);
   const roiScore = clamp((roi / (cfg.minROI * 2)) * 100, 0, 100);
   const deliveryScore =
     product.deliveryDays <= cfg.preferDeliveryDays ? 100 : 70;
-  const qualityScore = clamp(((product.rating || 4) - 3.5) * 60, 0, 100);
 
   const finalScore = Math.round(
     profitScore * 0.4 +
-    roiScore * 0.2 +
-    deliveryScore * 0.2 +
-    qualityScore * 0.2
+    roiScore * 0.3 +
+    deliveryScore * 0.3
   );
 
   const tier =
     finalScore >= 85 ? "A" :
     finalScore >= 75 ? "B" : "C";
 
-  const pass = reasons.length === 0 && (tier === "A" || tier === "B");
+  const pass = reasons.length === 0 && tier !== "C";
 
   return {
     pass,
     tier,
     score: finalScore,
-    reasons,
     metrics: {
       netProfit: Number(netProfit.toFixed(2)),
       roi: Number((roi * 100).toFixed(1))
-    }
+    },
+    reasons
   };
 }
 
 /* =======================
-   POST (REAL USE)
+   POST /score (REAL)
 ======================= */
 router.post("/score", (req, res) => {
   const product = req.body || {};
@@ -174,32 +154,22 @@ router.post("/score", (req, res) => {
 
   const fast = fastReject(product, cfg);
   if (fast.length) {
-    return res.json({
-      ok: true,
-      pass: false,
-      tier: "REJECT",
-      score: 0,
-      reasons: fast
-    });
+    return res.json({ ok: true, pass: false, tier: "REJECT", reasons: fast });
   }
 
   const result = scoreProduct(product, cfg);
 
-  // ✅ STORE WINNERS (CRITICAL STEP)
+  // ✅ STORE CSV-READY WINNER
   if (result.pass) {
     addWinner({
       title: product.title,
-      supplier: product.supplier,
-      supplierUrl: product.supplierUrl || "",
-      itemCost: product.itemCost,
-      sellPrice: product.sellPrice,
-      shippingCost: product.shippingCost,
-      deliveryDays: product.deliveryDays,
-      imagesCount: product.images.length,
-      rating: product.rating,
-      reviews: product.reviews,
-      score: result.score,
-      tier: result.tier
+      supplierUrl: product.supplierUrl,
+      cost: product.itemCost,
+      price: product.sellPrice,
+      quantity: product.stock || 50,
+      images: product.images.length,
+      shippingDays: product.deliveryDays,
+      notes: `Tier ${result.tier} | Score ${result.score}`
     });
   }
 
@@ -207,39 +177,41 @@ router.post("/score", (req, res) => {
 });
 
 /* =======================
-   GET TEST (BROWSER SAFE)
+   GET /score-test (BROWSER)
 ======================= */
 router.get("/score-test", (req, res) => {
   const product = {
-    title: req.query.title || "Wireless Bluetooth Headphones Noise Cancelling",
-    supplier: req.query.supplier || "amazon",
-    supplierUrl: req.query.supplierUrl || "https://amazon.com",
-    itemCost: toNumber(req.query.itemCost || 18.99),
-    sellPrice: toNumber(req.query.sellPrice || 39.99),
-    shippingCost: toNumber(req.query.shippingCost || 3.5),
-    rating: toNumber(req.query.rating || 4.6),
-    reviews: toNumber(req.query.reviews || 1500),
-    deliveryDays: toNumber(req.query.shippingDays || 6),
+    title: "Wireless Bluetooth Headphones",
+    supplierUrl: "https://amazon.com/dp/TEST",
+    itemCost: 18.99,
+    sellPrice: 39.99,
+    shippingCost: 3.5,
+    rating: 4.6,
+    reviews: 1200,
+    deliveryDays: 6,
+    stock: 80,
     inStock: true,
-    images: new Array(toNumber(req.query.imagesCount || 5)).fill("img")
+    images: new Array(5).fill("img")
   };
 
   const fast = fastReject(product, DEFAULTS);
   if (fast.length) {
-    return res.json({
-      ok: true,
-      pass: false,
-      tier: "REJECT",
-      score: 0,
-      reasons: fast
-    });
+    return res.json({ ok: true, pass: false, reasons: fast });
   }
 
   const result = scoreProduct(product, DEFAULTS);
 
-  // ✅ STORE TEST WINNERS TOO
   if (result.pass) {
-    addWinner(product);
+    addWinner({
+      title: product.title,
+      supplierUrl: product.supplierUrl,
+      cost: product.itemCost,
+      price: product.sellPrice,
+      quantity: product.stock,
+      images: product.images.length,
+      shippingDays: product.deliveryDays,
+      notes: `Tier ${result.tier} | Score ${result.score}`
+    });
   }
 
   res.json({ ok: true, ...result });
