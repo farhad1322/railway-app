@@ -1,7 +1,10 @@
 // config/routes/autodsExport.js
 const express = require("express");
 const router = express.Router();
-const winnerStore = require("./winnerStore");
+
+// ✅ Winner store (single source of truth)
+const { getWinners, clearWinners } = require("./winnerStore");
+
 
 // ---------- CSV HEADER ----------
 const CSV_HEADER = [
