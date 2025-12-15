@@ -17,7 +17,7 @@ app.use(cors());
 app.use(express.json());
 
 // ----------------------
-// Root route – simple info
+// Root route
 // ----------------------
 app.get("/", (req, res) => {
   res.json({
@@ -25,8 +25,8 @@ app.get("/", (req, res) => {
     message: "Backend is running. Use /api/ebay or /api/engine",
     endpoints: {
       ebay: "/api/ebay",
-      engine: "/api/engine",
-    },
+      engine: "/api/engine"
+    }
   });
 });
 
@@ -49,7 +49,7 @@ app.get("/health/full", (req, res) => {
     server: "up",
     ebayRouter: "mounted",
     engineRouter: "mounted",
-    timestamp: new Date().toISOString(),
+    timestamp: new Date().toISOString()
   });
 });
 
