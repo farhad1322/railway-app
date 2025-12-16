@@ -1,3 +1,5 @@
+const supplierImportRouter = require("./supplierImport");
+
 // config/routes/autoEngine.js
 // Version: 1.6 (v1.5 + Seller Safety Guard API)
 
@@ -655,6 +657,7 @@ router.use("/image-guard", require("./imageGuard"));
 router.use("/images", require("./imagesPipeline"));
 router.use("/winners", require("./winnerScoring"));
 router.use("/autods", require("./autodsExport"));
+router.use("/", supplierImportRouter);
 
 /* ------------------------- Export ------------------------- */
 module.exports = router;
