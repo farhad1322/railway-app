@@ -2,8 +2,20 @@ const express = require("express");
 const router = express.Router();
 
 /**
+ * -----------------------------------
+ * SIMPLE IN-MEMORY QUEUE (SAFE)
+ * -----------------------------------
+ * NOTE:
+ * - Temporary (resets on restart)
+ * - No DB
+ * - No AutoDS
+ * - Railway safe
+ */
+const supplierQueue = [];
+
+/**
  * POST /api/engine/suppliers/import-bulk
- * Temporary SAFE bulk import (no DB, no AutoDS)
+ * SAFE bulk import (queued, not processed)
  */
 router.post("/suppliers/import-bulk", (req, res) => {
   try {
@@ -26,7 +38,7 @@ router.post("/suppliers/import-bulk", (req, res) => {
       });
     }
 
-    // 3️⃣ Validate each product (minimal)
+    // 3️⃣ Validate & queue products
     let validCount = 0;
     let invalidCount = 0;
 
@@ -38,20 +50,26 @@ router.post("/suppliers/import-bulk", (req, res) => {
         p.title &&
         p.price
       ) {
+        supplierQueue.push({
+          ...p,
+          status: "queued",
+          importedAt: new Date().toISOString()
+        });
         validCount++;
       } else {
         invalidCount++;
       }
     });
 
-    // 4️⃣ Success response (NO processing yet)
+    // 4️⃣ Success response
     return res.json({
       ok: true,
       received: products.length,
       valid: validCount,
       invalid: invalidCount,
-      status: "Supplier bulk import accepted (processing disabled)",
-      nextStep: "Queue system will handle this later"
+      queuedTotal: supplierQueue.length,
+      status: "Products queued successfully",
+      nextStep: "Queue processor will handle this later"
     });
 
   } catch (error) {
@@ -61,6 +79,18 @@ router.post("/suppliers/import-bulk", (req, res) => {
       error: "Internal server error"
     });
   }
+});
+
+/**
+ * GET /api/engine/queue/status
+ * Check queue size (browser-safe)
+ */
+router.get("/queue/status", (req, res) => {
+  res.json({
+    ok: true,
+    queuedProducts: supplierQueue.length,
+    timestamp: new Date().toISOString()
+  });
 });
 
 module.exports = router;
