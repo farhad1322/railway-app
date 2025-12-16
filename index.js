@@ -2,6 +2,7 @@
 
 const express = require("express");
 const cors = require("cors");
+const rateLimit = require("express-rate-limit");
 
 // Route modules
 const ebayRouter = require("./config/routes/ebay");
@@ -11,10 +12,23 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ----------------------
+// Rate Limiter (SAFE for 20k/day)
+// ----------------------
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 500, // 500 requests per IP per 15 min
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Apply limiter ONLY to engine routes
+app.use("/api/engine", apiLimiter);
+
+// ----------------------
 // Middlewares
 // ----------------------
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "5mb" }));
 
 // ----------------------
 // Root route
@@ -22,11 +36,11 @@ app.use(express.json());
 app.get("/", (req, res) => {
   res.json({
     ok: true,
-    message: "Backend is running. Use /api/ebay or /api/engine",
+    message: "Backend is running",
     endpoints: {
       ebay: "/api/ebay",
-      engine: "/api/engine"
-    }
+      engine: "/api/engine",
+    },
   });
 });
 
@@ -37,7 +51,7 @@ app.use("/api/ebay", ebayRouter);
 app.use("/api/engine", engineRouter);
 
 // ----------------------
-// Health checks (Railway-safe)
+// Health checks
 // ----------------------
 app.get("/health", (req, res) => {
   res.json({ ok: true });
@@ -47,9 +61,8 @@ app.get("/health/full", (req, res) => {
   res.json({
     ok: true,
     server: "up",
-    ebayRouter: "mounted",
-    engineRouter: "mounted",
-    timestamp: new Date().toISOString()
+    rateLimiter: "active",
+    timestamp: new Date().toISOString(),
   });
 });
 
@@ -60,4 +73,4 @@ app.listen(PORT, () => {
   console.log(`Backend server listening on port ${PORT}`);
 });
 
-// DO NOT export app when using app.listen on Railway
+module.exports = app;
