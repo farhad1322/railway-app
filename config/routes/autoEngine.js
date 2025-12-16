@@ -92,5 +92,39 @@ router.get("/queue/status", (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+/**
+ * POST /api/engine/queue/process
+ * Manually process queued supplier products (SAFE)
+ */
+router.post("/queue/process", (req, res) => {
+  const BATCH_SIZE = 100;
+
+  if (supplierQueue.length === 0) {
+    return res.json({
+      ok: true,
+      message: "Queue is empty",
+      processed: 0,
+      remaining: 0
+    });
+  }
+
+  // Take a small batch
+  const batch = supplierQueue.splice(0, BATCH_SIZE);
+
+  // Simulate processing (no heavy logic yet)
+  const processed = batch.map((p) => ({
+    ...p,
+    status: "processed",
+    processedAt: new Date().toISOString()
+  }));
+
+  res.json({
+    ok: true,
+    message: "Queue batch processed successfully",
+    processed: processed.length,
+    remaining: supplierQueue.length,
+    sample: processed.slice(0, 3) // preview only
+  });
+});
 
 module.exports = router;
