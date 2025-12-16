@@ -2,7 +2,6 @@
 
 const express = require("express");
 const cors = require("cors");
-const rateLimit = require("express-rate-limit");
 
 // Route modules
 const ebayRouter = require("./config/routes/ebay");
@@ -12,23 +11,10 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ----------------------
-// Rate Limiter (SAFE for 20k/day)
-// ----------------------
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 500, // 500 requests per IP per 15 min
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-// Apply limiter ONLY to engine routes
-app.use("/api/engine", apiLimiter);
-
-// ----------------------
 // Middlewares
 // ----------------------
 app.use(cors());
-app.use(express.json({ limit: "5mb" }));
+app.use(express.json());
 
 // ----------------------
 // Root route
@@ -36,11 +22,11 @@ app.use(express.json({ limit: "5mb" }));
 app.get("/", (req, res) => {
   res.json({
     ok: true,
-    message: "Backend is running",
+    message: "Backend is running. Use /api/ebay or /api/engine",
     endpoints: {
       ebay: "/api/ebay",
-      engine: "/api/engine",
-    },
+      engine: "/api/engine"
+    }
   });
 });
 
@@ -61,8 +47,9 @@ app.get("/health/full", (req, res) => {
   res.json({
     ok: true,
     server: "up",
-    rateLimiter: "active",
-    timestamp: new Date().toISOString(),
+    ebayRouter: "mounted",
+    engineRouter: "mounted",
+    timestamp: new Date().toISOString()
   });
 });
 
