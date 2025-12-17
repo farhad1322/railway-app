@@ -1,18 +1,23 @@
 const express = require("express");
+const Redis = require("ioredis");
 const router = express.Router();
-const winnerScoringRouter = require("./winnerScoring");
 
 /**
- * In-memory SAFE queue (temporary)
- * No DB, resets on restart (INTENTIONAL)
+ * Redis connection
+ * Railway injects REDIS_URL automatically
  */
-let queue = [];
+const redis = new Redis(process.env.REDIS_URL);
+
+/**
+ * Redis queue key
+ */
+const QUEUE_KEY = "supplier_queue";
 
 /**
  * POST /api/engine/suppliers/import-bulk
- * SAFE bulk import (adds to memory queue)
+ * SAFE bulk import → Redis queue
  */
-router.post("/suppliers/import-bulk", (req, res) => {
+router.post("/suppliers/import-bulk", async (req, res) => {
   try {
     const products = req.body;
 
@@ -32,121 +37,71 @@ router.post("/suppliers/import-bulk", (req, res) => {
     }
 
     let added = 0;
-    products.forEach(p => {
+
+    for (const p of products) {
       if (p && p.sku && p.title && p.price) {
-        queue.push(p);
+        await redis.rpush(QUEUE_KEY, JSON.stringify(p));
         added++;
       }
-    });
+    }
 
-    return res.json({
+    const queueLength = await redis.llen(QUEUE_KEY);
+
+    res.json({
       ok: true,
       received: products.length,
       addedToQueue: added,
-      queuedProducts: queue.length,
-      status: "Products queued (SAFE MODE)"
+      queuedProducts: queueLength,
+      status: "Products queued in Redis"
     });
 
   } catch (err) {
     console.error("Import error:", err);
-    return res.status(500).json({ ok: false, error: "Server error" });
+    res.status(500).json({ ok: false, error: "Server error" });
   }
 });
 
 /**
  * GET /api/engine/queue/status
- * Queue health check
  */
-router.get("/queue/status", (req, res) => {
+router.get("/queue/status", async (req, res) => {
+  const length = await redis.llen(QUEUE_KEY);
+
   res.json({
     ok: true,
-    queuedProducts: queue.length,
+    queuedProducts: length,
+    storage: "redis",
     timestamp: new Date().toISOString()
   });
 });
 
 /**
  * POST /api/engine/queue/process
- * SAFE queue processing (simulation only)
+ * SAFE Redis processing (simulation)
  */
-router.post("/queue/process", (req, res) => {
+router.post("/queue/process", async (req, res) => {
   try {
     const MAX_PROCESS = 100;
-    const processed = queue.splice(0, MAX_PROCESS);
+    let processed = 0;
 
-    return res.json({
+    for (let i = 0; i < MAX_PROCESS; i++) {
+      const item = await redis.lpop(QUEUE_KEY);
+      if (!item) break;
+      processed++;
+    }
+
+    const remaining = await redis.llen(QUEUE_KEY);
+
+    res.json({
       ok: true,
-      processedCount: processed.length,
-      remainingInQueue: queue.length,
-      note: "SAFE processing only — no AutoDS, no DB"
+      processedCount: processed,
+      remainingInQueue: remaining,
+      note: "SAFE Redis processing only"
     });
 
   } catch (err) {
     console.error("Process error:", err);
-    return res.status(500).json({ ok: false, error: "Processing failed" });
-  }
-});
-router.use("/winner-scoring", winnerScoringRouter);
-/**
- * POST /api/engine/scan-and-queue
- * CSV/JSON → Winner Scoring → Queue (SAFE MODE)
- */
-router.post("/scan-and-queue", (req, res) => {
-  try {
-    const products = req.body;
-
-    if (!Array.isArray(products)) {
-      return res.status(400).json({
-        ok: false,
-        error: "Body must be an array of products"
-      });
-    }
-
-    const scorer = require("./winnerScoring");
-
-    let scanned = products.length;
-    let passed = 0;
-    let rejected = 0;
-
-    products.forEach((product) => {
-      try {
-        // simulate internal scoring call
-        const fastRejects = scorer.fastReject
-          ? scorer.fastReject(product)
-          : [];
-
-        if (fastRejects.length) {
-          rejected++;
-          return;
-        }
-
-        const result = scorer.scoreProduct
-          ? scorer.scoreProduct(product)
-          : { pass: false };
-
-        if (result.pass) {
-          queue.push(product);
-          passed++;
-        } else {
-          rejected++;
-        }
-      } catch (e) {
-        rejected++;
-      }
-    });
-
-    return res.json({
-      ok: true,
-      scanned,
-      passedToQueue: passed,
-      rejected,
-      queuedProducts: queue.length,
-      note: "SAFE MODE — scoring + queue only"
-    });
-
-  } catch (err) {
-    console.error("Scan error:", err);
-    return res.status(500).json({ ok: false, error: "Scan failed" });
+    res.status(500).json({ ok: false, error: "Processing failed" });
   }
 });
 
