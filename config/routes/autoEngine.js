@@ -87,5 +87,67 @@ router.post("/queue/process", (req, res) => {
   }
 });
 router.use("/winner-scoring", winnerScoringRouter);
+/**
+ * POST /api/engine/scan-and-queue
+ * CSV/JSON → Winner Scoring → Queue (SAFE MODE)
+ */
+router.post("/scan-and-queue", (req, res) => {
+  try {
+    const products = req.body;
+
+    if (!Array.isArray(products)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Body must be an array of products"
+      });
+    }
+
+    const scorer = require("./winnerScoring");
+
+    let scanned = products.length;
+    let passed = 0;
+    let rejected = 0;
+
+    products.forEach((product) => {
+      try {
+        // simulate internal scoring call
+        const fastRejects = scorer.fastReject
+          ? scorer.fastReject(product)
+          : [];
+
+        if (fastRejects.length) {
+          rejected++;
+          return;
+        }
+
+        const result = scorer.scoreProduct
+          ? scorer.scoreProduct(product)
+          : { pass: false };
+
+        if (result.pass) {
+          queue.push(product);
+          passed++;
+        } else {
+          rejected++;
+        }
+      } catch (e) {
+        rejected++;
+      }
+    });
+
+    return res.json({
+      ok: true,
+      scanned,
+      passedToQueue: passed,
+      rejected,
+      queuedProducts: queue.length,
+      note: "SAFE MODE — scoring + queue only"
+    });
+
+  } catch (err) {
+    console.error("Scan error:", err);
+    return res.status(500).json({ ok: false, error: "Scan failed" });
+  }
+});
 
 module.exports = router;
