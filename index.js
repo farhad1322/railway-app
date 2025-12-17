@@ -2,6 +2,7 @@
 
 const express = require("express");
 const cors = require("cors");
+const queueRouter = require("./config/routes/queue");
 
 // =========================
 // Route modules (ONLY existing files)
@@ -40,6 +41,7 @@ app.get("/", (req, res) => {
 // =========================
 app.use("/api/ebay", ebayRouter);
 app.use("/api/engine", engineRouter);
+app.use("/api/engine/queue", queueRouter);
 
 // =========================
 // 404 Handler
