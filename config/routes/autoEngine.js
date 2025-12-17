@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const winnerScoringRouter = require("./winnerScoring");
 
 /**
  * In-memory SAFE queue (temporary)
@@ -85,5 +86,6 @@ router.post("/queue/process", (req, res) => {
     return res.status(500).json({ ok: false, error: "Processing failed" });
   }
 });
+router.use("/winner-scoring", winnerScoringRouter);
 
 module.exports = router;
