@@ -1,34 +1,31 @@
 // config/workers/engineWorker.js
-// Background worker that processes jobs from Redis queue
+// SAFE Redis worker for Railway (no infinite loop)
 
 const redis = require("../redis.js");
 
 const QUEUE_KEY = "engine:queue";
 
-async function startWorker() {
-  console.log("🟢 Engine Worker started");
+console.log("🚀 Engine Worker booting...");
 
-  while (true) {
-    try {
-      const job = await redis.brPop(QUEUE_KEY, 0);
+async function processOneJob() {
+  try {
+    const job = await redis.brPop(QUEUE_KEY, 5); // wait max 5 sec
 
-      if (!job) continue;
-
-      const payload = JSON.parse(job.element);
-      console.log("⚙️ Processing job:", payload);
-
-      // Simulated work
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      console.log("✅ Job completed:", payload);
-    } catch (err) {
-      console.error("❌ Worker error:", err.message);
+    if (!job) {
+      return;
     }
+
+    const payload = JSON.parse(job.element);
+    console.log("⚙️ Processing job:", payload);
+
+    // simulate work
+    await new Promise((r) => setTimeout(r, 2000));
+
+    console.log("✅ Job completed");
+  } catch (err) {
+    console.error("❌ Worker error:", err.message);
   }
 }
 
-if (require.main === module) {
-  startWorker();
-}
-
-module.exports = startWorker;
+// Run worker every 3 seconds (SAFE)
+setInterval(processOneJob, 3000);
