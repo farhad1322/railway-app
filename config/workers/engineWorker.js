@@ -21,7 +21,10 @@ async function pollQueue() {
   } catch (err) {
     console.error("❌ Worker error:", err.message);
   }
-}
+}startWorker().catch(err => {
+  console.error("❌ Worker crashed:", err);
+});
+
 
 // run safely every 3 seconds
 setInterval(pollQueue, 3000);
