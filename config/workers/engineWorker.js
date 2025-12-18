@@ -4,15 +4,18 @@ const redis = require("../redis");
 
 const QUEUE_KEY = "engine:queue";
 
-console.log("🚀 Engine Worker started");
+console.log("🚀 Engine Worker starting...");
 
 async function pollQueue() {
   try {
-    const result = await redis.brPop(QUEUE_KEY, 5); // wait 5 sec
+    const job = await redis.brPop(QUEUE_KEY, 5);
 
-    if (!result) return;
+    if (!job) {
+      console.log("⏳ No job in queue");
+      return;
+    }
 
-    const payload = JSON.parse(result[1]);
+    const payload = JSON.parse(job[1]);
     console.log("⚙️ Processing job:", payload);
 
     // simulate work
@@ -20,9 +23,9 @@ async function pollQueue() {
 
     console.log("✅ Job finished");
   } catch (err) {
-    console.error("❌ Worker error:", err.message);
+    console.error("❌ Worker error:", err);
   }
 }
 
-// run every 3 seconds safely
+// run every 3 seconds
 setInterval(pollQueue, 3000);
