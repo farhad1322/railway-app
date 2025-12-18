@@ -4,28 +4,26 @@ const redis = require("../redis");
 
 const QUEUE_KEY = "engine:queue";
 
-console.log("🚀 Engine Worker starting...");
+console.log("🚀 Engine Worker started");
 
 async function pollQueue() {
   try {
-    const job = await redis.brPop(QUEUE_KEY, 5);
+    // ioredis returns [key, value]
+    const result = await redis.brpop(QUEUE_KEY, 5);
 
-    if (!job) {
-      console.log("⏳ No job in queue");
-      return;
-    }
+    if (!result) return;
 
-    const payload = JSON.parse(job[1]);
+    const payload = JSON.parse(result[1]);
     console.log("⚙️ Processing job:", payload);
 
     // simulate work
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 2000));
 
     console.log("✅ Job finished");
   } catch (err) {
-    console.error("❌ Worker error:", err);
+    console.error("❌ Worker error:", err.message);
   }
 }
 
-// run every 3 seconds
+// run every 3 seconds safely
 setInterval(pollQueue, 3000);
