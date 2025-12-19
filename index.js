@@ -9,6 +9,7 @@ const queueRouter = require("./config/routes/queue");
 // =========================
 const ebayRouter = require("./config/routes/ebay");
 const engineRouter = require("./config/routes/autoEngine");
+const autodsIngestRouter = require("./config/routes/autodsIngest");
 
 // =========================
 // App setup
@@ -42,6 +43,7 @@ app.get("/", (req, res) => {
 app.use("/api/ebay", ebayRouter);
 app.use("/api/engine", engineRouter);
 app.use("/api/engine/queue", queueRouter);
+app.use("/api/autods", autodsIngestRouter);
 
 // =========================
 // 404 Handler
