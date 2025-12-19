@@ -65,6 +65,33 @@ async function pollQueue() {
       const payload = JSON.parse(element);
 
       console.log("⚙️ Processing job:", payload);
+// ================================
+// 🛡️ EBAY SAFE EXECUTION GATE
+// ================================
+
+if (await checkKillSwitch()) {
+  console.log("🛑 Kill switch enabled. Worker paused.");
+  return;
+}
+
+if (!(await canListToday())) {
+  console.log("🧱 Daily listing limit reached. Skipping job.");
+  return;
+}
+
+if (!(await canListThisHour())) {
+  console.log("⏳ Hourly limit reached. Waiting before retry.");
+  await sleep(10 * 60 * 1000); // wait 10 minutes
+  return;
+}
+
+const delay = randomDelayMs();
+console.log(`⏱ Human delay before action: ${Math.round(delay / 1000)} sec`);
+await sleep(delay);
+
+// ================================
+// 🚀 SAFE TO PROCEED
+// ================================
 
       // simulate work
       await new Promise((r) => setTimeout(r, 2000));
