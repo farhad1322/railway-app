@@ -1,17 +1,12 @@
-// config/redis.js
 const Redis = require("ioredis");
 
-const redis = new Redis(process.env.REDIS_URL, {
-  maxRetriesPerRequest: null,
-  enableReadyCheck: true,
-});
+if (!process.env.REDIS_URL) {
+  console.warn("⚠️ REDIS_URL is missing. Set it in Railway Variables.");
+}
 
-redis.on("connect", () => {
-  console.log("✅ Redis connected");
-});
+const redis = new Redis(process.env.REDIS_URL);
 
-redis.on("error", (err) => {
-  console.error("❌ Redis error:", err.message);
-});
+redis.on("connect", () => console.log("✅ Redis connected"));
+redis.on("error", (e) => console.error("❌ Redis error:", e.message));
 
 module.exports = redis;
