@@ -5,7 +5,7 @@ const cors = require("cors");
 const queueRouter = require("./config/routes/queue");
 
 // =========================
-// Route modules (ONLY existing files)
+// Route modules
 // =========================
 const ebayRouter = require("./config/routes/ebay");
 const engineRouter = require("./config/routes/autoEngine");
@@ -29,10 +29,11 @@ app.use(express.json());
 app.get("/", (req, res) => {
   res.json({
     ok: true,
-    message: "Backend is running. Use /api/ebay or /api/engine",
+    message: "Backend is running",
     endpoints: {
       ebay: "/api/ebay",
-      engine: "/api/engine"
+      engine: "/api/engine",
+      autods: "/api/autods"
     }
   });
 });
