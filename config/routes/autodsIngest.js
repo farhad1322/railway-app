@@ -6,63 +6,74 @@ const csv = require("csv-parser");
 const redis = require("../redis");
 
 const router = express.Router();
-
 const QUEUE_KEY = process.env.QUEUE_KEY || "engine:queue";
 
 /**
  * POST /api/autods/ingest
  * Body: { "filePath": "/app/data/autods.csv" }
  */
-router.post("/ingest", (req, res) => {
-  const filePath = req.body.filePath;
+router.post("/ingest", async (req, res) => {
+  const filePath = req.body && req.body.filePath;
 
   if (!filePath) {
-    return res.status(400).json({
-      ok: false,
-      error: "filePath is required"
-    });
+    return res.status(400).json({ ok: false, error: "filePath is required" });
   }
+
+  const resolvedPath = path.resolve(filePath);
+
+  // Optional: basic safety check so someone can’t read random files
+  // (You can remove this if you want)
+  // if (!resolvedPath.endsWith(".csv")) {
+  //   return res.status(400).json({ ok: false, error: "filePath must be a .csv file" });
+  // }
 
   let count = 0;
+  let pushed = 0;
 
-  const fullPath = path.resolve(filePath);
+  try {
+    const stream = fs.createReadStream(resolvedPath).pipe(csv());
 
-  if (!fs.existsSync(fullPath)) {
-    return res.status(400).json({
-      ok: false,
-      error: "CSV file not found"
-    });
-  }
-
-  fs.createReadStream(fullPath)
-    .pipe(csv())
-    .on("data", (row) => {
+    stream.on("data", (row) => {
       const job = {
         source: "autods",
-        sku: row.SKU || row.sku,
-        title: row.Title || row.title,
-        price: row.Price || row.price,
-        supplier: row.Supplier || "unknown",
+        sku: row.SKU || row.sku || "",
+        title: row.Title || row.title || "",
+        price: row.Price || row.price || "",
+        supplier: row.Supplier || row.supplier || "unknown",
         timestamp: Date.now()
       };
 
-      redis.lpush(QUEUE_KEY, JSON.stringify(job));
       count++;
-    })
-    .on("end", () => {
+
+      // push to redis without blocking the stream
+      redis
+        .lpush(QUEUE_KEY, JSON.stringify(job))
+        .then(() => {
+          pushed++;
+        })
+        .catch((err) => {
+          console.error("Redis LPUSH error:", err.message);
+        });
+    });
+
+    stream.on("end", () => {
       res.json({
         ok: true,
-        message: "AutoDS CSV ingested successfully",
-        jobsAdded: count
-      });
-    })
-    .on("error", (err) => {
-      console.error("CSV parse error:", err);
-      res.status(500).json({
-        ok: false,
-        error: "CSV parsing failed"
+        message: "AutoDS CSV ingested",
+        rowsRead: count,
+        jobsAdded: pushed,
+        queueKey: QUEUE_KEY
       });
     });
+
+    stream.on("error", (err) => {
+      console.error("CSV stream error:", err);
+      res.status(500).json({ ok: false, error: "CSV read failed" });
+    });
+  } catch (err) {
+    console.error("AutoDS ingest error:", err);
+    res.status(500).json({ ok: false, error: "Ingest failed" });
+  }
 });
 
 module.exports = router;
