@@ -15,5 +15,6 @@
     "axios": "^1.7.2",
     "express-rate-limit": "^7.4.0",
     "ioredis": "^5.4.1"
+     "csv-parser": "^3.0.0"
   }
 }
