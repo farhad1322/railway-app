@@ -1,75 +1,52 @@
 // config/routes/autodsIngest.js
 const express = require("express");
-const fs = require("fs");
-const path = require("path");
 const csv = require("csv-parser");
+const multer = require("multer");
 const redis = require("../redis");
+const { Readable } = require("stream");
 
 const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage() });
+
 const QUEUE_KEY = process.env.QUEUE_KEY || "engine:queue";
 
 /**
  * POST /api/autods/ingest
- * Body: { "filePath": "/app/data/autods.csv" }
+ * multipart/form-data
+ * file: CSV file
  */
-router.post("/ingest", async (req, res) => {
-  const filePath = req.body && req.body.filePath;
-
-  if (!filePath) {
-    return res.status(400).json({ ok: false, error: "filePath is required" });
+router.post("/ingest", upload.single("file"), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ ok: false, error: "CSV file is required" });
   }
 
-  const resolvedPath = path.resolve(filePath);
-
-  // Optional: basic safety check so someone can’t read random files
-  // (You can remove this if you want)
-  // if (!resolvedPath.endsWith(".csv")) {
-  //   return res.status(400).json({ ok: false, error: "filePath must be a .csv file" });
-  // }
-
   let count = 0;
-  let pushed = 0;
 
   try {
-    const stream = fs.createReadStream(resolvedPath).pipe(csv());
+    const stream = Readable.from(req.file.buffer);
 
-    stream.on("data", (row) => {
-      const job = {
-        source: "autods",
-        sku: row.SKU || row.sku || "",
-        title: row.Title || row.title || "",
-        price: row.Price || row.price || "",
-        supplier: row.Supplier || row.supplier || "unknown",
-        timestamp: Date.now()
-      };
+    stream
+      .pipe(csv())
+      .on("data", async (row) => {
+        const job = {
+          source: "autods",
+          sku: row.SKU || row.sku,
+          title: row.Title || row.title,
+          price: row.Price || row.price,
+          supplier: row.Supplier || "AutoDS",
+          timestamp: Date.now()
+        };
 
-      count++;
-
-      // push to redis without blocking the stream
-      redis
-        .lpush(QUEUE_KEY, JSON.stringify(job))
-        .then(() => {
-          pushed++;
-        })
-        .catch((err) => {
-          console.error("Redis LPUSH error:", err.message);
+        await redis.lpush(QUEUE_KEY, JSON.stringify(job));
+        count++;
+      })
+      .on("end", () => {
+        res.json({
+          ok: true,
+          message: "CSV uploaded & queued successfully",
+          jobsAdded: count
         });
-    });
-
-    stream.on("end", () => {
-      res.json({
-        ok: true,
-        message: "AutoDS CSV ingested",
-        rowsRead: count,
-        jobsAdded: pushed,
-        queueKey: QUEUE_KEY
       });
-    });
-
-    stream.on("error", (err) => {
-      console.error("CSV stream error:", err);
-      res.status(500).json({ ok: false, error: "CSV read failed" });
-    });
   } catch (err) {
     console.error("AutoDS ingest error:", err);
     res.status(500).json({ ok: false, error: "Ingest failed" });
