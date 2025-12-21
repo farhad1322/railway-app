@@ -7,9 +7,13 @@ const redis = require("../redis");
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
-
 const QUEUE_KEY = process.env.QUEUE_KEY || "engine:queue";
 
+/**
+ * POST /api/autods/ingest
+ * multipart/form-data
+ * key: file (CSV)
+ */
 router.post("/ingest", upload.single("file"), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ ok: false, error: "CSV file is required" });
@@ -29,16 +33,26 @@ router.post("/ingest", upload.single("file"), async (req, res) => {
         })
       )
       .on("data", async (row) => {
-        // Required fields check
-        if (!row.sku || !row.title || !row.price) return;
+        const sku =
+          row.sku || row.SKU || row["Sku"] || row["sku "] || row[" SKU"];
+        const title =
+          row.title ||
+          row.Title ||
+          row["Product Title"] ||
+          row["title "] ||
+          row[" TITLE"];
+        const price = row.price || row.Price || row["Price(USD)"];
+        const supplier = row.supplier || row.Supplier || "AutoDS";
+
+        if (!sku || !title || !price) return;
 
         const job = {
           source: "autods",
-          sku: row.sku,
-          title: row.title,
-          price: Number(row.price),
-          supplier: row.supplier || "unknown",
-          timestamp: Date.now()
+          sku: sku.trim(),
+          title: title.trim(),
+          price: Number(price),
+          supplier: supplier.trim(),
+          createdAt: new Date().toISOString(),
         };
 
         await redis.lpush(QUEUE_KEY, JSON.stringify(job));
@@ -48,7 +62,7 @@ router.post("/ingest", upload.single("file"), async (req, res) => {
         res.json({
           ok: true,
           message: "CSV uploaded & queued successfully",
-          jobsAdded: count
+          jobsAdded: count,
         });
       });
   } catch (err) {
