@@ -7,8 +7,7 @@ const queueRouter = require("./config/routes/queue");
 const ebayRouter = require("./config/routes/ebay");
 const engineRouter = require("./config/routes/autoEngine");
 const autodsIngestRouter = require("./config/routes/autodsIngest");
-
-const { getThreshold, resetStats } = require("./config/adaptiveThreshold");
+const throttleRouter = require("./config/routes/throttle");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -16,7 +15,6 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Root health check
 app.get("/", (req, res) => {
   res.json({
     ok: true,
@@ -25,31 +23,18 @@ app.get("/", (req, res) => {
       ebay: "/api/ebay",
       engine: "/api/engine",
       queue: "/api/engine/queue",
-      autodsIngest: "/api/autods/ingest",
-      winnerThreshold: "/api/winners/threshold",
-      winnerReset: "/api/winners/reset"
+      autods: "/api/autods",
+      throttle: "/api/throttle/status"
     }
   });
 });
 
-// API Routes
 app.use("/api/ebay", ebayRouter);
 app.use("/api/engine", engineRouter);
 app.use("/api/engine/queue", queueRouter);
 app.use("/api/autods", autodsIngestRouter);
+app.use("/api/throttle", throttleRouter);
 
-// Winner scoring utilities (monitoring)
-app.get("/api/winners/threshold", async (req, res) => {
-  const threshold = await getThreshold();
-  res.json({ ok: true, threshold });
-});
-
-app.post("/api/winners/reset", async (req, res) => {
-  const out = await resetStats();
-  res.json(out);
-});
-
-// 404 Handler
 app.use((req, res) => {
   res.status(404).json({ ok: false, error: "Route not found" });
 });
