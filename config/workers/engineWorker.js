@@ -1,45 +1,16 @@
+// config/workers/engineWorker.js
 const redis = require("../redis");
+const throttle = require("../throttle");
+
 // ================================
-// 🛡️ EBAY SAFE AUTOMATION HELPERS
+// 🛡️ SAFETY HELPERS
 // ================================
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function randomDelayMs() {
-  const min = Number(process.env.LISTING_DELAY_MIN_SEC || 300) * 1000;
-  const max = Number(process.env.LISTING_DELAY_MAX_SEC || 1800) * 1000;
-  return Math.floor(min + Math.random() * (max - min));
-}
-
-function dayKey(name) {
-  const d = new Date();
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(d.getUTCDate()).padStart(2, "0");
-  return `${name}:${yyyy}-${mm}-${dd}`;
-}
-
-async function incrWithExpiry(key, ttlSeconds) {
-  const val = await redis.incr(key);
-  if (val === 1) await redis.expire(key, ttlSeconds);
-  return val;
-}
-
-async function canListToday() {
-  const maxPerDay = Number(process.env.MAX_LISTINGS_PER_DAY || 40);
-  const key = dayKey("limit:listings:day");
-  const count = await incrWithExpiry(key, 60 * 60 * 30);
-  return count <= maxPerDay;
-}
-
-async function canListThisHour() {
-  const maxPerHour = Number(process.env.MAX_LISTINGS_PER_HOUR || 6);
-  const d = new Date();
-  const hourKey = `${dayKey("limit:listings:hour")}:${d.getUTCHours()}`;
-  const count = await incrWithExpiry(hourKey, 60 * 60 + 60);
-  return count <= maxPerHour;
+function safeJsonParse(str) {
+  try {
+    return JSON.parse(str);
+  } catch {
+    return null;
+  }
 }
 
 async function checkKillSwitch() {
@@ -47,61 +18,87 @@ async function checkKillSwitch() {
 }
 
 // ================================
-// END EBAY SAFE HELPERS
+// QUEUE CONFIG
 // ================================
-
 const QUEUE_KEY = process.env.QUEUE_KEY || "engine:queue";
 
 console.log("🚀 Engine Worker started. queue =", QUEUE_KEY);
 
+// ================================
+// MAIN LOOP
+// ================================
 async function pollQueue() {
   try {
-    // ioredis uses lowercase command: brpop
-    const result = await redis.brpop(QUEUE_KEY, 5); // wait up to 5 sec
+    // Block until a job exists
+    const result = await redis.brpop(QUEUE_KEY, 0);
 
-    // result is: [key, element]  OR  null (timeout)
-    if (result && result.length === 2) {
-      const element = result[1];
-      const payload = JSON.parse(element);
+    if (!result || result.length !== 2) return;
 
-      console.log("⚙️ Processing job:", payload);
-// ================================
-// 🛡️ EBAY SAFE EXECUTION GATE
-// ================================
+    const payloadRaw = result[1];
+    const job = safeJsonParse(payloadRaw);
 
-if (await checkKillSwitch()) {
-  console.log("🛑 Kill switch enabled. Worker paused.");
-  return;
-}
+    if (!job) {
+      console.warn("⚠️ Invalid job payload, skipping");
+      return;
+    }
 
-if (!(await canListToday())) {
-  console.log("🧱 Daily listing limit reached. Skipping job.");
-  return;
-}
+    console.log("⚙️ Job received:", job.sku || job.title || "unknown");
 
-if (!(await canListThisHour())) {
-  console.log("⏳ Hourly limit reached. Waiting before retry.");
-  await sleep(10 * 60 * 1000); // wait 10 minutes
-  return;
-}
+    // ================================
+    // 🛑 GLOBAL KILL SWITCH
+    // ================================
+    if (await checkKillSwitch()) {
+      console.log("🛑 Kill switch enabled. Pausing worker.");
+      await redis.lpush(QUEUE_KEY, payloadRaw); // push job back
+      return;
+    }
 
-const delay = randomDelayMs();
-console.log(`⏱ Human delay before action: ${Math.round(delay / 1000)} sec`);
-await sleep(delay);
+    // ================================
+    // 🧠 ADAPTIVE THROTTLE (STEP 5)
+    // ================================
+    const throttleInfo = await throttle.waitTurn();
+    if (throttleInfo?.waitedMs > 0) {
+      console.log(
+        `⏳ Throttle waited ${Math.round(
+          throttleInfo.waitedMs / 1000
+        )}s (${throttleInfo.reason})`
+      );
+    }
 
-// ================================
-// 🚀 SAFE TO PROCEED
-// ================================
+    try {
+      // ================================
+      // 🚀 PLACE REAL LOGIC HERE
+      // ================================
+      // Example: create listing / repricing / image pipeline
+      await new Promise((r) => setTimeout(r, 2000)); // simulate work
 
-      // simulate work
-      await new Promise((r) => setTimeout(r, 2000));
+      console.log("✅ Job completed successfully");
 
-      console.log("✅ Job finished");
+      // ================================
+      // ✅ MARK SUCCESS (updates counters)
+      // ================================
+      await throttle.onSuccess();
+    } catch (err) {
+      console.error("❌ Job processing failed:", err?.message || err);
+
+      // ================================
+      // ⚠️ AUTO SLOWDOWN ON ERROR
+      // ================================
+      await throttle.onError();
+
+      // Optional retry later
+      await redis.lpush(QUEUE_KEY, payloadRaw);
     }
   } catch (err) {
-    console.error("❌ Worker error:", err);
+    console.error("❌ Worker loop error:", err);
   }
 }
 
-// run every 1 second (fine)
-setInterval(pollQueue, 1000);
+// ================================
+// START LOOP
+// ================================
+(async function run() {
+  while (true) {
+    await pollQueue();
+  }
+})();
