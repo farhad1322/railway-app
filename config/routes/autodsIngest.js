@@ -2,7 +2,7 @@
 const express = require("express");
 const multer = require("multer");
 const csv = require("csv-parser");
-const stream = require("stream");
+const { Readable } = require("stream");
 const redis = require("../redis");
 
 const router = express.Router();
@@ -10,36 +10,34 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 const QUEUE_KEY = process.env.QUEUE_KEY || "engine:queue";
 
-/**
- * POST /api/autods/ingest
- * multipart/form-data
- * key: file  (CSV)
- */
 router.post("/ingest", upload.single("file"), async (req, res) => {
   if (!req.file) {
-    return res.status(400).json({
-      ok: false,
-      error: "CSV file is required"
-    });
+    return res.status(400).json({ ok: false, error: "CSV file is required" });
   }
 
   let count = 0;
 
   try {
-    const bufferStream = new stream.PassThrough();
-    bufferStream.end(req.file.buffer);
+    const stream = Readable.from(req.file.buffer.toString("utf8"));
 
-    bufferStream
-      .pipe(csv())
+    stream
+      .pipe(
+        csv({
+          separator: ",",
+          mapHeaders: ({ header }) =>
+            header.replace(/^\uFEFF/, "").trim().toLowerCase()
+        })
+      )
       .on("data", async (row) => {
-        if (!row.SKU || !row.Title || !row.Price) return;
+        // Required fields check
+        if (!row.sku || !row.title || !row.price) return;
 
         const job = {
           source: "autods",
-          sku: row.SKU,
-          title: row.Title,
-          price: Number(row.Price),
-          supplier: row.Supplier || "AutoDS",
+          sku: row.sku,
+          title: row.title,
+          price: Number(row.price),
+          supplier: row.supplier || "unknown",
           timestamp: Date.now()
         };
 
@@ -53,13 +51,9 @@ router.post("/ingest", upload.single("file"), async (req, res) => {
           jobsAdded: count
         });
       });
-
   } catch (err) {
-    console.error("❌ CSV ingest error:", err);
-    res.status(500).json({
-      ok: false,
-      error: "CSV processing failed"
-    });
+    console.error("AutoDS ingest error:", err);
+    res.status(500).json({ ok: false, error: "Ingest failed" });
   }
 });
 
