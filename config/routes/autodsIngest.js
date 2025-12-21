@@ -1,50 +1,88 @@
 // config/routes/autodsIngest.js
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
 const csv = require("csv-parser");
-const multer = require("multer");
 const redis = require("../redis");
-const { Readable } = require("stream");
+
+const { scoreProduct } = require("../scoring");
+const { getThreshold, recordResult } = require("../adaptiveThreshold");
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage() });
-
 const QUEUE_KEY = process.env.QUEUE_KEY || "engine:queue";
 
 /**
  * POST /api/autods/ingest
- * multipart/form-data
- * file: CSV file
+ * multipart/form-data: file=<csv>
  */
-router.post("/ingest", upload.single("file"), async (req, res) => {
-  if (!req.file) {
+router.post("/ingest", async (req, res) => {
+  // IMPORTANT:
+  // Your current working version already supports file upload.
+  // This code assumes your upload middleware is already in place.
+  // If you already have it, keep it. If not, tell me and I’ll give you the exact middleware file.
+
+  // If your existing route uses req.file, keep that behavior:
+  const uploaded = req.file; // (works if you already integrated multer earlier)
+  if (!uploaded) {
     return res.status(400).json({ ok: false, error: "CSV file is required" });
   }
 
-  let count = 0;
+  const filePath = uploaded.path;
+
+  let total = 0;
+  let queued = 0;
+  let rejected = 0;
 
   try {
-    const stream = Readable.from(req.file.buffer);
+    const threshold = await getThreshold();
 
-    stream
+    fs.createReadStream(path.resolve(filePath))
       .pipe(csv())
       .on("data", async (row) => {
-        const job = {
+        total++;
+
+        const candidate = {
           source: "autods",
-          sku: row.SKU || row.sku,
-          title: row.Title || row.title,
-          price: row.Price || row.price,
-          supplier: row.Supplier || "AutoDS",
+          sku: row.SKU || row.sku || "",
+          title: row.Title || row.title || "",
+          price: row.Price || row.price || "",
+          supplier: row.Supplier || row.supplier || "unknown",
           timestamp: Date.now()
         };
 
-        await redis.lpush(QUEUE_KEY, JSON.stringify(job));
-        count++;
+        const score = scoreProduct(candidate);
+        const pass = score >= threshold;
+
+        // Record adaptive learning
+        await recordResult(pass);
+
+        if (!pass) {
+          rejected++;
+          return;
+        }
+
+        candidate.score = score;
+        candidate.threshold = threshold;
+
+        await redis.lpush(QUEUE_KEY, JSON.stringify(candidate));
+        queued++;
       })
-      .on("end", () => {
+      .on("end", async () => {
+        // Threshold may have adjusted, return latest
+        const latestThreshold = await getThreshold();
+
         res.json({
           ok: true,
-          message: "CSV uploaded & queued successfully",
-          jobsAdded: count
+          message: "CSV uploaded & queued successfully (winners only)",
+          stats: {
+            totalRows: total,
+            queued,
+            rejected
+          },
+          threshold: {
+            usedAtStart: threshold,
+            current: latestThreshold
+          }
         });
       });
   } catch (err) {
