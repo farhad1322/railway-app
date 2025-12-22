@@ -1,104 +1,90 @@
 // config/workers/engineWorker.js
+
 const redis = require("../redis");
-const throttle = require("../throttle");
 
-// ================================
-// 🛡️ SAFETY HELPERS
-// ================================
-function safeJsonParse(str) {
-  try {
-    return JSON.parse(str);
-  } catch {
-    return null;
-  }
-}
-
-async function checkKillSwitch() {
-  return String(process.env.KILL_SWITCH || "0") === "1";
-}
-
-// ================================
-// QUEUE CONFIG
-// ================================
+/* ================================
+   CONFIG
+================================ */
 const QUEUE_KEY = process.env.QUEUE_KEY || "engine:queue";
 
-console.log("🚀 Engine Worker started. queue =", QUEUE_KEY);
+/* ================================
+   HELPERS
+================================ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-// ================================
-// MAIN LOOP
-// ================================
+function todayKey(name) {
+  const d = new Date().toISOString().slice(0, 10);
+  return `${name}:${d}`;
+}
+
+async function incrWithTTL(key, ttl) {
+  const val = await redis.incr(key);
+  if (val === 1) await redis.expire(key, ttl);
+  return val;
+}
+
+/* ================================
+   PHASE LOGIC
+================================ */
+async function getPhase() {
+  const day = await incrWithTTL("system:dayCounter", 60 * 60 * 24 * 365);
+
+  if (day <= 3) return { phase: 0, maxPerDay: 20 };
+  if (day <= 10) return { phase: 1, maxPerDay: 50 };
+  if (day <= 20) return { phase: 2, maxPerDay: 100 };
+  if (day <= 30) return { phase: 3, maxPerDay: 160 };
+  if (day <= 60) return { phase: 4, maxPerDay: 200 };
+  return { phase: 5, maxPerDay: 300 };
+}
+
+/* ================================
+   SAFETY CHECKS
+================================ */
+async function canListToday(maxPerDay) {
+  const key = todayKey("limit:listings");
+  const count = await incrWithTTL(key, 60 * 60 * 30);
+  return count <= maxPerDay;
+}
+
+function humanDelay() {
+  const min = Number(process.env.LISTING_DELAY_MIN_SEC || 600);
+  const max = Number(process.env.LISTING_DELAY_MAX_SEC || 1800);
+  return (min + Math.random() * (max - min)) * 1000;
+}
+
+/* ================================
+   WORKER LOOP
+================================ */
 async function pollQueue() {
   try {
-    // Block until a job exists
-    const result = await redis.brpop(QUEUE_KEY, 0);
+    const job = await redis.brpop(QUEUE_KEY, 5);
+    if (!job) return;
 
-    if (!result || result.length !== 2) return;
+    const payload = JSON.parse(job[1]);
+    const phaseInfo = await getPhase();
 
-    const payloadRaw = result[1];
-    const job = safeJsonParse(payloadRaw);
-
-    if (!job) {
-      console.warn("⚠️ Invalid job payload, skipping");
+    if (!(await canListToday(phaseInfo.maxPerDay))) {
+      console.log("🧱 Daily limit reached:", phaseInfo.maxPerDay);
       return;
     }
 
-    console.log("⚙️ Job received:", job.sku || job.title || "unknown");
+    const delay = humanDelay();
+    console.log(`⏱ Phase ${phaseInfo.phase} | Delay ${Math.round(delay / 1000)}s`);
+    await sleep(delay);
 
-    // ================================
-    // 🛑 GLOBAL KILL SWITCH
-    // ================================
-    if (await checkKillSwitch()) {
-      console.log("🛑 Kill switch enabled. Pausing worker.");
-      await redis.lpush(QUEUE_KEY, payloadRaw); // push job back
-      return;
-    }
+    // 🔌 HOOKS (SAFE – ENABLED LATER)
+    payload.enableRepricing = phaseInfo.phase >= 2;
+    payload.enableAIImages = phaseInfo.phase >= 3;
 
-    // ================================
-    // 🧠 ADAPTIVE THROTTLE (STEP 5)
-    // ================================
-    const throttleInfo = await throttle.waitTurn();
-    if (throttleInfo?.waitedMs > 0) {
-      console.log(
-        `⏳ Throttle waited ${Math.round(
-          throttleInfo.waitedMs / 1000
-        )}s (${throttleInfo.reason})`
-      );
-    }
+    // 🚀 SIMULATED LISTING ACTION
+    console.log("✅ Listed:", payload.title || payload.sku);
 
-    try {
-      // ================================
-      // 🚀 PLACE REAL LOGIC HERE
-      // ================================
-      // Example: create listing / repricing / image pipeline
-      await new Promise((r) => setTimeout(r, 2000)); // simulate work
-
-      console.log("✅ Job completed successfully");
-
-      // ================================
-      // ✅ MARK SUCCESS (updates counters)
-      // ================================
-      await throttle.onSuccess();
-    } catch (err) {
-      console.error("❌ Job processing failed:", err?.message || err);
-
-      // ================================
-      // ⚠️ AUTO SLOWDOWN ON ERROR
-      // ================================
-      await throttle.onError();
-
-      // Optional retry later
-      await redis.lpush(QUEUE_KEY, payloadRaw);
-    }
   } catch (err) {
-    console.error("❌ Worker loop error:", err);
+    console.error("❌ Worker error:", err.message);
   }
 }
 
-// ================================
-// START LOOP
-// ================================
-(async function run() {
-  while (true) {
-    await pollQueue();
-  }
-})();
+console.log("🚀 Engine Worker running");
+setInterval(pollQueue, 1000);
