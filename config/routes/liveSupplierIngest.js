@@ -3,70 +3,67 @@ const axios = require("axios");
 const csv = require("csv-parser");
 const stream = require("stream");
 const redis = require("../redis");
-const scoring = require("../scoring");
 
 const router = express.Router();
 const QUEUE_KEY = process.env.QUEUE_KEY || "engine:queue";
 
 /**
  * POST /api/supplier/ingest
- * Body:
+ * Body (JSON):
  * {
- *   "source": "autods",
- *   "feedUrl": "https://supplier-feed-url.csv"
+ *   "source": "supplier-name",
+ *   "feedUrl": "https://example.com/products.csv"
  * }
  */
 router.post("/ingest", async (req, res) => {
-  const source = req.body.source || "supplier";
-  const { feedUrl } = req.body;
+  const { source = "supplier", feedUrl } = req.body;
 
   if (!feedUrl) {
     return res.status(400).json({
       ok: false,
-      error: "feedUrl required"
+      error: "feedUrl is required"
     });
   }
 
   let jobsAdded = 0;
-  const pending = [];
 
   try {
-    const response = await axios.get(feedUrl, { responseType: "stream" });
+    console.log("📥 Supplier ingest started:", feedUrl);
+
+    const response = await axios.get(feedUrl, {
+      responseType: "stream",
+      timeout: 30000
+    });
+
     const pass = new stream.PassThrough();
     response.data.pipe(pass);
 
     pass
       .pipe(csv())
-      .on("data", (row) => {
+      .on("data", async (row) => {
         try {
           const product = {
             source,
-            sku: row.SKU || row.sku || "",
+            sku: row.SKU || row.sku || null,
             title: row.Title || row.title || "",
             price: Number(row.Price || row.price || 0),
             supplier: row.Supplier || source,
             timestamp: Date.now()
           };
 
-          const score = scoring.score(product);
+          // Basic validation (safe)
+          if (!product.sku || !product.title || product.price <= 0) {
+            return;
+          }
 
-          // Reject weak products
-          if (score < 60) return;
-
-          pending.push(
-            redis.lpush(QUEUE_KEY, JSON.stringify(product))
-              .then(() => {
-                jobsAdded++;
-              })
-          );
-
+          await redis.lpush(QUEUE_KEY, JSON.stringify(product));
+          jobsAdded++;
         } catch (e) {
-          console.warn("Row skipped:", e.message);
+          console.error("⚠️ Row error:", e.message);
         }
       })
-      .on("end", async () => {
-        await Promise.all(pending);
-
+      .on("end", () => {
+        console.log(`✅ Supplier ingest finished. Jobs added: ${jobsAdded}`);
         res.json({
           ok: true,
           message: "Live supplier feed ingested",
@@ -75,7 +72,7 @@ router.post("/ingest", async (req, res) => {
       });
 
   } catch (err) {
-    console.error("Supplier ingest error:", err.message);
+    console.error("❌ Supplier ingest error:", err.message);
     res.status(500).json({
       ok: false,
       error: "Supplier ingest failed"
