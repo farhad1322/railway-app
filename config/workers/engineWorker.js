@@ -77,6 +77,30 @@ async function pollQueue() {
     // 🔌 HOOKS (SAFE – ENABLED LATER)
     payload.enableRepricing = phaseInfo.phase >= 2;
     payload.enableAIImages = phaseInfo.phase >= 3;
+/* ================================
+   🔁 REPRICING HOOK (SAFE)
+================================ */
+if (payload.enableRepricing) {
+  payload.repricing = {
+    mode: "competitive",
+    minMarginPercent: 12,
+    maxIncreasePercent: 8,
+    checkedAt: new Date().toISOString()
+  };
+  console.log("💰 Repricing enabled");
+}
+
+/* ================================
+   🖼️ AI IMAGE HOOK (SAFE)
+================================ */
+if (payload.enableAIImages) {
+  payload.aiImage = {
+    provider: "external-ai",
+    status: "queued",
+    estimatedCostUSD: 0.005
+  };
+  console.log("🖼️ AI image queued");
+}
 
     // 🚀 SIMULATED LISTING ACTION
     console.log("✅ Listed:", payload.title || payload.sku);
