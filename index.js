@@ -34,7 +34,6 @@ app.use("/api/engine", engineRouter);
 app.use("/api/engine/queue", queueRouter);
 app.use("/api/autods", autodsIngestRouter);
 app.use("/api/throttle", throttleRouter);
-app.use("/api/supplier", require("./config/routes/liveSupplierIngest"));
 
 app.use((req, res) => {
   res.status(404).json({ ok: false, error: "Route not found" });
