@@ -4,9 +4,20 @@ const csv = require("csv-parser");
 const stream = require("stream");
 const redis = require("../redis");
 
+// ✅ CORRECT IMPORT
+const { scoreWinner } = require("../workers/winnerScoring");
+
 const router = express.Router();
 const QUEUE_KEY = process.env.QUEUE_KEY || "engine:queue";
 
+/**
+ * POST /api/supplier/ingest
+ * Body:
+ * {
+ *   "source": "supplier-name",
+ *   "feedUrl": "https://example.com/feed.csv"
+ * }
+ */
 router.post("/ingest", async (req, res) => {
   const { source = "supplier", feedUrl } = req.body;
 
@@ -20,16 +31,11 @@ router.post("/ingest", async (req, res) => {
   let jobsAdded = 0;
 
   try {
-    console.log("📥 Supplier ingest started:", feedUrl);
+    console.log("📥 Fetching supplier feed:", feedUrl);
 
     const response = await axios.get(feedUrl, {
       responseType: "stream",
-      timeout: 20000,
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Railway Bot)",
-        "Accept": "text/csv,text/plain"
-      },
-      validateStatus: (status) => status === 200
+      timeout: 30000
     });
 
     const pass = new stream.PassThrough();
@@ -39,38 +45,37 @@ router.post("/ingest", async (req, res) => {
       .pipe(csv())
       .on("data", async (row) => {
         try {
-          const sku = row.SKU || row.sku || row.id;
-          const title = row.Title || row.title || row.name;
-          const price = Number(row.Price || row.price || 0);
-
-          if (!sku || !title || price <= 0) return;
-
           const product = {
             source,
-            sku,
-            title,
-            price,
+            sku: row.SKU || row.sku || "",
+            title: row.Title || row.title || "",
+            price: Number(row.Price || row.price || 0),
             supplier: source,
             timestamp: Date.now()
           };
 
+          const score = scoreWinner(product);
+
+          // ❌ Reject weak products (EXPECTED)
+          if (score < 60) return;
+
           await redis.lpush(QUEUE_KEY, JSON.stringify(product));
           jobsAdded++;
-        } catch (e) {
-          console.error("⚠️ Row parse error:", e.message);
+        } catch (rowErr) {
+          console.error("Row error:", rowErr.message);
         }
       })
       .on("end", () => {
         console.log(`✅ Supplier ingest finished. Jobs added: ${jobsAdded}`);
         res.json({
           ok: true,
-          message: "Live supplier feed ingested",
+          message: "Supplier feed ingested",
           jobsAdded
         });
       });
 
   } catch (err) {
-    console.error("❌ Supplier ingest error:", err.message);
+    console.error("❌ Supplier ingest failed:", err.message);
     res.status(500).json({
       ok: false,
       error: "Supplier ingest failed"
