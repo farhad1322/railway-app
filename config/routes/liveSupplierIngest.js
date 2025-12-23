@@ -7,14 +7,6 @@ const redis = require("../redis");
 const router = express.Router();
 const QUEUE_KEY = process.env.QUEUE_KEY || "engine:queue";
 
-/**
- * POST /api/supplier/ingest
- * Body (JSON):
- * {
- *   "source": "supplier-name",
- *   "feedUrl": "https://example.com/products.csv"
- * }
- */
 router.post("/ingest", async (req, res) => {
   const { source = "supplier", feedUrl } = req.body;
 
@@ -32,7 +24,12 @@ router.post("/ingest", async (req, res) => {
 
     const response = await axios.get(feedUrl, {
       responseType: "stream",
-      timeout: 30000
+      timeout: 20000,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Railway Bot)",
+        "Accept": "text/csv,text/plain"
+      },
+      validateStatus: (status) => status === 200
     });
 
     const pass = new stream.PassThrough();
@@ -42,24 +39,25 @@ router.post("/ingest", async (req, res) => {
       .pipe(csv())
       .on("data", async (row) => {
         try {
+          const sku = row.SKU || row.sku || row.id;
+          const title = row.Title || row.title || row.name;
+          const price = Number(row.Price || row.price || 0);
+
+          if (!sku || !title || price <= 0) return;
+
           const product = {
             source,
-            sku: row.SKU || row.sku || null,
-            title: row.Title || row.title || "",
-            price: Number(row.Price || row.price || 0),
-            supplier: row.Supplier || source,
+            sku,
+            title,
+            price,
+            supplier: source,
             timestamp: Date.now()
           };
-
-          // Basic validation (safe)
-          if (!product.sku || !product.title || product.price <= 0) {
-            return;
-          }
 
           await redis.lpush(QUEUE_KEY, JSON.stringify(product));
           jobsAdded++;
         } catch (e) {
-          console.error("⚠️ Row error:", e.message);
+          console.error("⚠️ Row parse error:", e.message);
         }
       })
       .on("end", () => {
