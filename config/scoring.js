@@ -54,4 +54,4 @@ function scoreProduct(input) {
   return clamp(Math.round(score), 0, 100);
 }
 
-module.exports = { scoreProduct };
+module.exports = scoreWinner;
