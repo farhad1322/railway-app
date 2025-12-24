@@ -5,7 +5,8 @@ const stream = require("stream");
 const redis = require("../redis");
 
 // ✅ CORRECT IMPORT
-const { scoreWinner } = require("../workers/winnerScoring");
+const scoreWinner = require("../workers/winnerScoring");
+
 
 const router = express.Router();
 const QUEUE_KEY = process.env.QUEUE_KEY || "engine:queue";
