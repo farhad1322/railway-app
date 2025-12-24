@@ -3,6 +3,7 @@ const axios = require("axios");
 const csv = require("csv-parser");
 const stream = require("stream");
 const redis = require("../redis");
+
 const { scoreWinner } = require("../workers/winnerScoring");
 
 const router = express.Router();
@@ -12,7 +13,7 @@ router.post("/ingest", async (req, res) => {
   const { source = "supplier", feedUrl } = req.body;
 
   if (!feedUrl) {
-    return res.status(400).json({ ok: false, error: "feedUrl required" });
+    return res.status(400).json({ ok: false, error: "feedUrl is required" });
   }
 
   let jobsAdded = 0;
@@ -25,16 +26,15 @@ router.post("/ingest", async (req, res) => {
 
     response.data
       .pipe(csv())
-      .on("data", async row => {
+      .on("data", async (row) => {
         const product = {
           source,
-          sku: row.sku || row.SKU,
-          title: row.title || row.Title,
-          price: Number(row.price || row.Price || 0),
-          supplier: source
+          sku: row.SKU || row.sku || "",
+          title: row.Title || row.title || "",
+          price: Number(row.Price || row.price || 0),
+          supplier: source,
+          timestamp: Date.now()
         };
-
-        if (!product.sku || !product.title || !product.price) return;
 
         const score = scoreWinner(product);
         if (score < 60) return;
@@ -43,15 +43,11 @@ router.post("/ingest", async (req, res) => {
         jobsAdded++;
       })
       .on("end", () => {
-        res.json({
-          ok: true,
-          message: "Supplier feed ingested",
-          jobsAdded
-        });
+        res.json({ ok: true, jobsAdded });
       });
 
   } catch (err) {
-    console.error("Supplier ingest error:", err.message);
+    console.error(err);
     res.status(500).json({ ok: false, error: "Supplier ingest failed" });
   }
 });
