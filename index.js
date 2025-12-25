@@ -6,14 +6,9 @@ const cors = require("cors");
 // ===== ROUTES =====
 const queueRouter = require("./config/routes/queue");
 const ebayRouter = require("./config/routes/ebay");
-const engineRouter = require("./config/routes/autoEngine"); // existing engine logic
+const engineRouter = require("./config/routes/autoEngine");
 const autodsIngestRouter = require("./config/routes/autodsIngest");
 const throttleRouter = require("./config/routes/throttle");
-
-// ✅ NEW: ENGINE CONTROL CENTER (status / threshold / ramp)
-const engineControlRouter = require("./config/routes/engine");
-
-// ✅ LIVE SUPPLIER INGEST
 const liveSupplierIngestRouter = require("./config/routes/liveSupplierIngest");
 
 const app = express();
@@ -31,8 +26,6 @@ app.get("/", (req, res) => {
     endpoints: {
       ebay: "/api/ebay",
       engine: "/api/engine",
-      engineStatus: "/api/engine/status",
-      thresholdReset: "/api/engine/threshold/reset",
       queue: "/api/engine/queue",
       autods: "/api/autods/ingest",
       supplier: "/api/supplier/ingest",
@@ -43,18 +36,10 @@ app.get("/", (req, res) => {
 
 // ===== API ROUTES =====
 app.use("/api/ebay", ebayRouter);
-
-// Existing engine logic
 app.use("/api/engine", engineRouter);
-
-// ✅ NEW control routes (VERY IMPORTANT)
-app.use("/api/engine", engineControlRouter);
-
 app.use("/api/engine/queue", queueRouter);
 app.use("/api/autods", autodsIngestRouter);
 app.use("/api/throttle", throttleRouter);
-
-// ✅ SUPPLIER FEED (MUST BE AFTER express.json)
 app.use("/api/supplier", liveSupplierIngestRouter);
 
 // ===== 404 HANDLER =====
