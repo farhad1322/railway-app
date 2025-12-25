@@ -1,3 +1,5 @@
+const adaptiveThreshold = require("../adaptiveThreshold");
+
 const express = require("express");
 const Redis = require("ioredis");
 const router = express.Router();
@@ -102,6 +104,19 @@ router.post("/queue/process", async (req, res) => {
   } catch (err) {
     console.error("Process error:", err);
     res.status(500).json({ ok: false, error: "Processing failed" });
+  }
+});
+// RESET adaptive threshold + stats (RUN ONCE ONLY)
+router.post("/threshold/reset", async (req, res) => {
+  try {
+    const result = await adaptiveThreshold.resetStats();
+    res.json(result);
+  } catch (err) {
+    console.error("Threshold reset failed:", err);
+    res.status(500).json({
+      ok: false,
+      error: "Threshold reset failed"
+    });
   }
 });
 
