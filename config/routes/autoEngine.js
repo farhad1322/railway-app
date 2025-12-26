@@ -1,7 +1,9 @@
-const adaptiveThreshold = require("../adaptiveThreshold");
-
 const express = require("express");
 const Redis = require("ioredis");
+
+const adaptiveThreshold = require("../adaptiveThreshold");
+const dailyRamp = require("../dailyRamp");
+
 const router = express.Router();
 
 /**
@@ -16,8 +18,10 @@ const redis = new Redis(process.env.REDIS_URL);
 const QUEUE_KEY = "supplier_queue";
 
 /**
+ * ---------------------------------------------------
  * POST /api/engine/suppliers/import-bulk
- * SAFE bulk import → Redis queue
+ * SAFE bulk import → Redis queue (used internally)
+ * ---------------------------------------------------
  */
 router.post("/suppliers/import-bulk", async (req, res) => {
   try {
@@ -64,7 +68,9 @@ router.post("/suppliers/import-bulk", async (req, res) => {
 });
 
 /**
+ * ---------------------------------------------------
  * GET /api/engine/queue/status
+ * ---------------------------------------------------
  */
 router.get("/queue/status", async (req, res) => {
   const length = await redis.llen(QUEUE_KEY);
@@ -78,8 +84,10 @@ router.get("/queue/status", async (req, res) => {
 });
 
 /**
+ * ---------------------------------------------------
  * POST /api/engine/queue/process
  * SAFE Redis processing (simulation)
+ * ---------------------------------------------------
  */
 router.post("/queue/process", async (req, res) => {
   try {
@@ -106,7 +114,88 @@ router.post("/queue/process", async (req, res) => {
     res.status(500).json({ ok: false, error: "Processing failed" });
   }
 });
-// RESET adaptive threshold + stats (RUN ONCE ONLY)
+
+/**
+ * ---------------------------------------------------
+ * POST /api/engine/evaluate
+ * FINAL GATE — score → threshold → ramp → queue
+ * ---------------------------------------------------
+ */
+router.post("/evaluate", async (req, res) => {
+  try {
+    const { products = [], mode = "live" } = req.body;
+
+    if (!Array.isArray(products)) {
+      return res.status(400).json({
+        ok: false,
+        error: "products must be an array"
+      });
+    }
+
+    let jobsAdded = 0;
+    let rejected = 0;
+    const inspected = [];
+
+    const threshold = await adaptiveThreshold.getThreshold();
+
+    for (const product of products) {
+      const score = Number(product.score || 0);
+
+      const passedThreshold = score >= threshold;
+      await adaptiveThreshold.recordResult(passedThreshold);
+
+      if (!passedThreshold) {
+        rejected++;
+        continue;
+      }
+
+      // ⛔ In TEST mode: inspect only
+      if (mode === "test") {
+        inspected.push({
+          ...product,
+          score,
+          threshold,
+          decision: "PASS (TEST)"
+        });
+        continue;
+      }
+
+      // ✅ DAILY RAMP CHECK (LIVE ONLY)
+      const ramp = await dailyRamp.canListOne();
+      if (!ramp.allowed) {
+        rejected++;
+        continue;
+      }
+
+      // ✅ APPROVED → QUEUE
+      await redis.rpush(QUEUE_KEY, JSON.stringify(product));
+      jobsAdded++;
+    }
+
+    res.json({
+      ok: true,
+      mode,
+      threshold,
+      jobsAdded,
+      rejected,
+      inspected
+    });
+
+  } catch (err) {
+    console.error("Engine evaluate error:", err);
+    res.status(500).json({
+      ok: false,
+      error: "Engine evaluation failed"
+    });
+  }
+});
+
+/**
+ * ---------------------------------------------------
+ * POST /api/engine/threshold/reset
+ * RUN ONCE when changing threshold logic
+ * ---------------------------------------------------
+ */
 router.post("/threshold/reset", async (req, res) => {
   try {
     const result = await adaptiveThreshold.resetStats();
