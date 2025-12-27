@@ -10,10 +10,10 @@ const engineRouter = require("./config/routes/autoEngine");
 const autodsIngestRouter = require("./config/routes/autodsIngest");
 const throttleRouter = require("./config/routes/throttle");
 const liveSupplierIngestRouter = require("./config/routes/liveSupplierIngest");
+const dashboardRouter = require("./config/routes/dashboard");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const dashboardRouter = require("./config/routes/dashboard");
 
 // ===== MIDDLEWARE =====
 app.use(cors());
@@ -30,7 +30,8 @@ app.get("/", (req, res) => {
       queue: "/api/engine/queue",
       autods: "/api/autods/ingest",
       supplier: "/api/supplier/ingest",
-      throttle: "/api/throttle/status"
+      throttle: "/api/throttle/status",
+      dashboard: "/dashboard"
     }
   });
 });
@@ -42,6 +43,9 @@ app.use("/api/engine/queue", queueRouter);
 app.use("/api/autods", autodsIngestRouter);
 app.use("/api/throttle", throttleRouter);
 app.use("/api/supplier", liveSupplierIngestRouter);
+
+// 🔥 DASHBOARD (HTML + JSON)
+app.use("/dashboard", dashboardRouter);
 app.use("/api/dashboard", dashboardRouter);
 
 // ===== 404 HANDLER =====
