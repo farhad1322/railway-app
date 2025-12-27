@@ -31,7 +31,8 @@ app.get("/", (req, res) => {
       autods: "/api/autods/ingest",
       supplier: "/api/supplier/ingest",
       throttle: "/api/throttle/status",
-      dashboard: "/dashboard"
+      dashboard_api: "/api/dashboard",
+      dashboard_ui: "/dashboard"
     }
   });
 });
@@ -44,9 +45,11 @@ app.use("/api/autods", autodsIngestRouter);
 app.use("/api/throttle", throttleRouter);
 app.use("/api/supplier", liveSupplierIngestRouter);
 
-// 🔥 DASHBOARD (HTML + JSON)
-app.use("/dashboard", dashboardRouter);
+// ✅ DASHBOARD (API)
 app.use("/api/dashboard", dashboardRouter);
+
+// ✅ DASHBOARD (BROWSER VIEW)
+app.use("/dashboard", dashboardRouter);
 
 // ===== 404 HANDLER =====
 app.use((req, res) => {
