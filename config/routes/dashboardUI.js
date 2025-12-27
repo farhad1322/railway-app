@@ -58,22 +58,27 @@ router.get("/", (req, res) => {
 
 <script>
 async function loadDashboard() {
-  const res = await fetch('/api/dashboard');
-  const data = await res.json();
+  try {
+    const res = await fetch('/api/dashboard');
+    const data = await res.json();
 
-  document.getElementById('status').innerHTML =
-    data.ok
-      ? '<span class="ok">✅ System Online</span>'
-      : '<span class="bad">❌ System Error</span>';
+    document.getElementById('status').innerHTML =
+      data.ok
+        ? '<span class="ok">✅ System Online</span>'
+        : '<span class="bad">❌ System Error</span>';
 
-  document.getElementById('queue').innerHTML =
-    'Pending products: <code>' + data.queue.pending + '</code>';
+    document.getElementById('queue').innerHTML =
+      'Pending products: <code>' + data.queue.pending + '</code>';
 
-  document.getElementById('threshold').innerHTML =
-    'Threshold: <code>' + data.adaptiveThreshold.threshold + '</code><br>' +
-    'Seen: <code>' + data.adaptiveThreshold.seen + '</code><br>' +
-    'Passed: <code>' + data.adaptiveThreshold.passed + '</code><br>' +
-    'Pass Rate: <code>' + data.adaptiveThreshold.passRate + '</code>';
+    document.getElementById('threshold').innerHTML =
+      'Threshold: <code>' + data.adaptiveThreshold.threshold + '</code><br>' +
+      'Seen: <code>' + data.adaptiveThreshold.seen + '</code><br>' +
+      'Passed: <code>' + data.adaptiveThreshold.passed + '</code><br>' +
+      'Pass Rate: <code>' + data.adaptiveThreshold.passRate + '</code>';
+  } catch (e) {
+    document.getElementById('status').innerHTML =
+      '<span class="bad">❌ API not reachable</span>';
+  }
 }
 
 loadDashboard();
