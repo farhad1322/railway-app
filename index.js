@@ -13,6 +13,7 @@ const liveSupplierIngestRouter = require("./config/routes/liveSupplierIngest");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const dashboardRouter = require("./config/routes/dashboard");
 
 // ===== MIDDLEWARE =====
 app.use(cors());
@@ -41,6 +42,7 @@ app.use("/api/engine/queue", queueRouter);
 app.use("/api/autods", autodsIngestRouter);
 app.use("/api/throttle", throttleRouter);
 app.use("/api/supplier", liveSupplierIngestRouter);
+app.use("/api/dashboard", dashboardRouter);
 
 // ===== 404 HANDLER =====
 app.use((req, res) => {
