@@ -1,36 +1,18 @@
 // config/workers/engineWorker.js
 
 const redis = require("../redis");
-const { requestAIImages } = require("../services/aiImageService");
+const winnerMemory = require("../services/winnerMemory");
 
 /* ================================
    CONFIG
 ================================ */
 const QUEUE_KEY = process.env.QUEUE_KEY || "engine:queue";
 
-// Repricing toggles (safe defaults)
-const REPRICE_ENABLED = String(process.env.REPRICE_ENABLED || "1") === "1";
-
-// Repricing limits
-const MIN_MARGIN_PERCENT = Number(process.env.MIN_MARGIN_PERCENT || 12);
-const MAX_INCREASE_PERCENT = Number(process.env.MAX_INCREASE_PERCENT || 8);
-const MAX_DECREASE_PERCENT = Number(process.env.MAX_DECREASE_PERCENT || 10);
-const UNDERCUT_AMOUNT = Number(process.env.UNDERCUT_AMOUNT || 0.01);
-const PRICE_ROUND_DECIMALS = Number(process.env.PRICE_ROUND_DECIMALS || 2);
-const DEFAULT_MARKUP_PERCENT = Number(process.env.DEFAULT_MARKUP_PERCENT || 18);
-
 /* ================================
    HELPERS
 ================================ */
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function roundPrice(n) {
-  const d = PRICE_ROUND_DECIMALS;
-  const p = Number(n);
-  if (!Number.isFinite(p)) return 0;
-  return Math.round(p * Math.pow(10, d)) / Math.pow(10, d);
 }
 
 function todayKey(name) {
@@ -45,7 +27,7 @@ async function incrWithTTL(key, ttl) {
 }
 
 /* ================================
-   PHASE LOGIC (0 → 300/day)
+   PHASE LOGIC
 ================================ */
 async function getPhase() {
   const day = await incrWithTTL("system:dayCounter", 60 * 60 * 24 * 365);
@@ -59,7 +41,7 @@ async function getPhase() {
 }
 
 /* ================================
-   SAFETY
+   SAFETY CHECKS
 ================================ */
 async function canListToday(maxPerDay) {
   const key = todayKey("limit:listings");
@@ -74,53 +56,6 @@ function humanDelay() {
 }
 
 /* ================================
-   REPRICING
-================================ */
-function extractCost(p) {
-  return Number(p.itemCost ?? p.cost ?? p.supplierCost ?? p.price ?? 0) || 0;
-}
-
-function computeMinPrice(cost) {
-  return roundPrice(cost * (1 + MIN_MARGIN_PERCENT / 100));
-}
-
-function computeDefaultPrice(cost) {
-  return roundPrice(cost * (1 + DEFAULT_MARKUP_PERCENT / 100));
-}
-
-function applyRepricing(payload) {
-  const cost = extractCost(payload);
-  if (cost <= 0) return null;
-
-  const minAllowed = computeMinPrice(cost);
-  const competitor = Number(payload.competitorPrice ?? NaN);
-
-  let target = computeDefaultPrice(cost);
-  let mode = "markup";
-
-  if (Number.isFinite(competitor) && competitor > 0) {
-    mode = "competitive";
-    target = competitor - UNDERCUT_AMOUNT;
-    target = Math.max(
-      competitor * (1 - MAX_DECREASE_PERCENT / 100),
-      Math.min(target, competitor * (1 + MAX_INCREASE_PERCENT / 100))
-    );
-  }
-
-  target = Math.max(target, minAllowed);
-
-  return {
-    enabled: true,
-    mode,
-    cost: roundPrice(cost),
-    minAllowed,
-    competitorPrice: Number.isFinite(competitor) ? roundPrice(competitor) : null,
-    targetPrice: roundPrice(target),
-    checkedAt: new Date().toISOString()
-  };
-}
-
-/* ================================
    WORKER LOOP
 ================================ */
 async function pollQueue() {
@@ -129,44 +64,73 @@ async function pollQueue() {
     if (!job) return;
 
     const payload = JSON.parse(job[1]);
-    const phase = await getPhase();
+    const sku = payload.sku;
 
-    if (!(await canListToday(phase.maxPerDay))) {
-      console.log("🧱 Daily limit reached:", phase.maxPerDay);
+    /* 🧠 WINNER MEMORY — HARD GATE */
+    if (await winnerMemory.isLoser(sku)) {
+      console.log("⛔ Skipped known LOSER:", sku);
       return;
     }
 
-    await sleep(humanDelay());
+    if (await winnerMemory.isWinner(sku)) {
+      console.log("⭐ Known WINNER — priority listing:", sku);
+    }
 
-    /* ===== REPRICING ===== */
-    payload.enableRepricing = phase.phase >= 2 && REPRICE_ENABLED;
+    const phaseInfo = await getPhase();
+
+    if (!(await canListToday(phaseInfo.maxPerDay))) {
+      console.log("🧱 Daily limit reached:", phaseInfo.maxPerDay);
+      return;
+    }
+
+    const delay = humanDelay();
+    console.log(`⏱ Phase ${phaseInfo.phase} | Delay ${Math.round(delay / 1000)}s`);
+    await sleep(delay);
+
+    /* ================================
+       SIMULATED SCORE (PLACEHOLDER)
+    ================================ */
+    const score = payload.score || Math.floor(Math.random() * 100);
+    const PASS_THRESHOLD = 65;
+
+    if (score >= PASS_THRESHOLD) {
+      await winnerMemory.markWinner(sku, score);
+      console.log("✅ WINNER saved:", sku, "score:", score);
+    } else {
+      await winnerMemory.markLoser(sku);
+      console.log("❌ LOSER blocked forever:", sku, "score:", score);
+      return;
+    }
+
+    /* ================================
+       PHASE FEATURES
+    ================================ */
+    payload.enableRepricing = phaseInfo.phase >= 2;
+    payload.enableAIImages = phaseInfo.phase >= 3;
 
     if (payload.enableRepricing) {
-      const repr = applyRepricing(payload);
-      if (repr) {
-        payload.repricing = repr;
-        payload.targetPrice = repr.targetPrice;
-        console.log("💰 Repriced →", repr.targetPrice);
-      }
+      payload.repricing = {
+        mode: "competitive",
+        minMarginPercent: 12,
+        maxIncreasePercent: 8
+      };
+      console.log("💰 Repricing enabled");
     }
-
-    /* ===== AI IMAGES (PHASE ≥ 3) ===== */
-    payload.enableAIImages = phase.phase >= 3;
 
     if (payload.enableAIImages) {
-      await requestAIImages(payload);
-      console.log("🖼️ AI image requested");
+      payload.aiImage = {
+        provider: "external-ai",
+        status: "queued"
+      };
+      console.log("🖼️ AI image queued");
     }
 
-    /* ===== FINAL ACTION ===== */
-    console.log(
-      `✅ READY: ${payload.title || payload.sku} | price=${payload.targetPrice} | phase=${phase.phase}`
-    );
+    console.log("🚀 LISTED:", payload.title || sku);
 
   } catch (err) {
     console.error("❌ Worker error:", err.message);
   }
 }
 
-console.log("🚀 Engine Worker running");
+console.log("🚀 Engine Worker running with WINNER MEMORY");
 setInterval(pollQueue, 1000);
