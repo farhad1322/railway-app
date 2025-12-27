@@ -1,6 +1,7 @@
 // config/workers/engineWorker.js
 
 const redis = require("../redis");
+const { requestAIImages } = require("../services/aiImageService");
 
 /* ================================
    CONFIG
@@ -10,29 +11,26 @@ const QUEUE_KEY = process.env.QUEUE_KEY || "engine:queue";
 // Repricing toggles (safe defaults)
 const REPRICE_ENABLED = String(process.env.REPRICE_ENABLED || "1") === "1";
 
-// If competitor price exists, we adjust within safe bounds
-const MIN_MARGIN_PERCENT = Number(process.env.MIN_MARGIN_PERCENT || 12); // protect profit
-const MAX_INCREASE_PERCENT = Number(process.env.MAX_INCREASE_PERCENT || 8); // don't overprice too much
-const MAX_DECREASE_PERCENT = Number(process.env.MAX_DECREASE_PERCENT || 10); // don't race to bottom
-const UNDERCUT_AMOUNT = Number(process.env.UNDERCUT_AMOUNT || 0.01); // small undercut
+// Repricing limits
+const MIN_MARGIN_PERCENT = Number(process.env.MIN_MARGIN_PERCENT || 12);
+const MAX_INCREASE_PERCENT = Number(process.env.MAX_INCREASE_PERCENT || 8);
+const MAX_DECREASE_PERCENT = Number(process.env.MAX_DECREASE_PERCENT || 10);
+const UNDERCUT_AMOUNT = Number(process.env.UNDERCUT_AMOUNT || 0.01);
 const PRICE_ROUND_DECIMALS = Number(process.env.PRICE_ROUND_DECIMALS || 2);
-
-// If no competitor price exists, we use markup floor (cost + margin)
 const DEFAULT_MARKUP_PERCENT = Number(process.env.DEFAULT_MARKUP_PERCENT || 18);
 
 /* ================================
    HELPERS
 ================================ */
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function roundPrice(n) {
-  const d = Number.isFinite(PRICE_ROUND_DECIMALS) ? PRICE_ROUND_DECIMALS : 2;
+  const d = PRICE_ROUND_DECIMALS;
   const p = Number(n);
   if (!Number.isFinite(p)) return 0;
-  const factor = Math.pow(10, d);
-  return Math.round(p * factor) / factor;
+  return Math.round(p * Math.pow(10, d)) / Math.pow(10, d);
 }
 
 function todayKey(name) {
@@ -47,7 +45,7 @@ async function incrWithTTL(key, ttl) {
 }
 
 /* ================================
-   PHASE LOGIC (Ramp 0 → 300/day)
+   PHASE LOGIC (0 → 300/day)
 ================================ */
 async function getPhase() {
   const day = await incrWithTTL("system:dayCounter", 60 * 60 * 24 * 365);
@@ -61,7 +59,7 @@ async function getPhase() {
 }
 
 /* ================================
-   SAFETY CHECKS
+   SAFETY
 ================================ */
 async function canListToday(maxPerDay) {
   const key = todayKey("limit:listings");
@@ -76,89 +74,49 @@ function humanDelay() {
 }
 
 /* ================================
-   REPRICING OPTIMIZATION (SAFE)
-   - NO external calls
-   - Uses competitorPrice if present in payload
-   - Protects minimum margin
+   REPRICING
 ================================ */
-function extractCost(payload) {
-  // Supplier cost is usually itemCost or cost or price (depending on your feed)
-  const c =
-    Number(payload.itemCost ?? payload.cost ?? payload.supplierCost ?? payload.price ?? 0);
-  return Number.isFinite(c) ? c : 0;
+function extractCost(p) {
+  return Number(p.itemCost ?? p.cost ?? p.supplierCost ?? p.price ?? 0) || 0;
 }
 
-function extractSellPrice(payload) {
-  const p = Number(payload.sellPrice ?? payload.listPrice ?? payload.targetPrice ?? 0);
-  return Number.isFinite(p) ? p : 0;
+function computeMinPrice(cost) {
+  return roundPrice(cost * (1 + MIN_MARGIN_PERCENT / 100));
 }
 
-function computeMinPriceFromCost(cost) {
-  // minimum price to keep margin
-  const minPrice = cost * (1 + MIN_MARGIN_PERCENT / 100);
-  return roundPrice(minPrice);
-}
-
-function computeDefaultTargetPrice(cost) {
-  // fallback price if no competitor info
-  const p = cost * (1 + DEFAULT_MARKUP_PERCENT / 100);
-  return roundPrice(p);
+function computeDefaultPrice(cost) {
+  return roundPrice(cost * (1 + DEFAULT_MARKUP_PERCENT / 100));
 }
 
 function applyRepricing(payload) {
   const cost = extractCost(payload);
-  if (cost <= 0) {
-    return {
-      enabled: false,
-      reason: "missing_cost",
-      cost,
-      targetPrice: extractSellPrice(payload) || 0,
-    };
-  }
+  if (cost <= 0) return null;
 
-  const minAllowed = computeMinPriceFromCost(cost);
+  const minAllowed = computeMinPrice(cost);
+  const competitor = Number(payload.competitorPrice ?? NaN);
 
-  // competitorPrice can be provided by future modules
-  const competitorPriceRaw = Number(payload.competitorPrice ?? payload.marketPrice ?? NaN);
-  const hasCompetitor = Number.isFinite(competitorPriceRaw) && competitorPriceRaw > 0;
-
-  // base price = existing sell price OR default target
-  const currentSell = extractSellPrice(payload);
-  const base = currentSell > 0 ? currentSell : computeDefaultTargetPrice(cost);
-
-  let target = base;
+  let target = computeDefaultPrice(cost);
   let mode = "markup";
 
-  if (hasCompetitor) {
+  if (Number.isFinite(competitor) && competitor > 0) {
     mode = "competitive";
-    const competitor = competitorPriceRaw;
-
-    // undercut competitor slightly (safe)
-    const desired = competitor - UNDERCUT_AMOUNT;
-
-    // clamp within max increase/decrease from competitor (avoid crazy)
-    const maxUp = competitor * (1 + MAX_INCREASE_PERCENT / 100);
-    const maxDown = competitor * (1 - MAX_DECREASE_PERCENT / 100);
-
-    target = desired;
-    target = Math.min(target, maxUp);
-    target = Math.max(target, maxDown);
+    target = competitor - UNDERCUT_AMOUNT;
+    target = Math.max(
+      competitor * (1 - MAX_DECREASE_PERCENT / 100),
+      Math.min(target, competitor * (1 + MAX_INCREASE_PERCENT / 100))
+    );
   }
 
-  // always protect minimum margin
   target = Math.max(target, minAllowed);
-
-  // round
-  target = roundPrice(target);
 
   return {
     enabled: true,
     mode,
     cost: roundPrice(cost),
     minAllowed,
-    basePrice: roundPrice(base),
-    competitorPrice: hasCompetitor ? roundPrice(competitorPriceRaw) : null,
-    targetPrice: target,
+    competitorPrice: Number.isFinite(competitor) ? roundPrice(competitor) : null,
+    targetPrice: roundPrice(target),
+    checkedAt: new Date().toISOString()
   };
 }
 
@@ -171,51 +129,44 @@ async function pollQueue() {
     if (!job) return;
 
     const payload = JSON.parse(job[1]);
-    const phaseInfo = await getPhase();
+    const phase = await getPhase();
 
-    if (!(await canListToday(phaseInfo.maxPerDay))) {
-      console.log("🧱 Daily limit reached:", phaseInfo.maxPerDay);
+    if (!(await canListToday(phase.maxPerDay))) {
+      console.log("🧱 Daily limit reached:", phase.maxPerDay);
       return;
     }
 
-    const delay = humanDelay();
-    console.log(`⏱ Phase ${phaseInfo.phase} | Delay ${Math.round(delay / 1000)}s`);
-    await sleep(delay);
+    await sleep(humanDelay());
 
-    // ✅ Enable repricing starting from Phase 2 (100/day ramp)
-    payload.enableRepricing = phaseInfo.phase >= 2 && REPRICE_ENABLED;
+    /* ===== REPRICING ===== */
+    payload.enableRepricing = phase.phase >= 2 && REPRICE_ENABLED;
 
     if (payload.enableRepricing) {
       const repr = applyRepricing(payload);
-
-      payload.repricing = {
-        ...repr,
-        checkedAt: new Date().toISOString(),
-      };
-
-      // Put the final price into payload.targetPrice (used later by AutoDS/eBay)
-      payload.targetPrice = repr.targetPrice;
-
-      console.log(
-        `💰 Repricing: mode=${repr.mode} cost=${repr.cost} min=${repr.minAllowed} target=${repr.targetPrice}` +
-          (repr.competitorPrice ? ` competitor=${repr.competitorPrice}` : "")
-      );
-    } else {
-      // Keep safe default targetPrice if not set
-      if (!payload.targetPrice) {
-        const cost = extractCost(payload);
-        payload.targetPrice = cost > 0 ? computeDefaultTargetPrice(cost) : extractSellPrice(payload);
+      if (repr) {
+        payload.repricing = repr;
+        payload.targetPrice = repr.targetPrice;
+        console.log("💰 Repriced →", repr.targetPrice);
       }
-      console.log("💤 Repricing OFF (phase or toggle). targetPrice =", payload.targetPrice);
     }
 
-    // 🚀 SIMULATED LISTING ACTION (no eBay/AutoDS yet)
-    console.log("✅ Ready for listing pipeline:", payload.title || payload.sku, "| targetPrice:", payload.targetPrice);
+    /* ===== AI IMAGES (PHASE ≥ 3) ===== */
+    payload.enableAIImages = phase.phase >= 3;
+
+    if (payload.enableAIImages) {
+      await requestAIImages(payload);
+      console.log("🖼️ AI image requested");
+    }
+
+    /* ===== FINAL ACTION ===== */
+    console.log(
+      `✅ READY: ${payload.title || payload.sku} | price=${payload.targetPrice} | phase=${phase.phase}`
+    );
 
   } catch (err) {
     console.error("❌ Worker error:", err.message);
   }
 }
 
-console.log("🚀 Engine Worker running. Queue =", QUEUE_KEY);
+console.log("🚀 Engine Worker running");
 setInterval(pollQueue, 1000);
