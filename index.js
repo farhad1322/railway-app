@@ -11,6 +11,7 @@ const autodsIngestRouter = require("./config/routes/autodsIngest");
 const throttleRouter = require("./config/routes/throttle");
 const liveSupplierIngestRouter = require("./config/routes/liveSupplierIngest");
 const dashboardRouter = require("./config/routes/dashboard");
+const dashboardUIRouter = require("./config/routes/dashboardUI");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -50,6 +51,7 @@ app.use("/api/dashboard", dashboardRouter);
 
 // ✅ DASHBOARD (BROWSER VIEW)
 app.use("/dashboard", dashboardRouter);
+app.use("/dashboard", dashboardUIRouter);
 
 // ===== 404 HANDLER =====
 app.use((req, res) => {
