@@ -38,19 +38,16 @@ app.get("/", (req, res) => {
   });
 });
 
-// ===== API ROUTES =====
+// ===== API ROUTES (JSON ONLY) =====
 app.use("/api/ebay", ebayRouter);
 app.use("/api/engine", engineRouter);
 app.use("/api/engine/queue", queueRouter);
 app.use("/api/autods", autodsIngestRouter);
 app.use("/api/throttle", throttleRouter);
 app.use("/api/supplier", liveSupplierIngestRouter);
-
-// ✅ DASHBOARD (API)
 app.use("/api/dashboard", dashboardRouter);
 
-// ✅ DASHBOARD (BROWSER VIEW)
-app.use("/dashboard", dashboardRouter);
+// ===== UI ROUTES (HTML ONLY) =====
 app.use("/dashboard", dashboardUIRouter);
 
 // ===== 404 HANDLER =====
