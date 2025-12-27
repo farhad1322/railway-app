@@ -2,52 +2,44 @@
 
 const express = require("express");
 const redis = require("../redis");
-const adaptiveThreshold = require("../adaptiveThreshold");
 
 const router = express.Router();
 
-const QUEUE_KEY = process.env.QUEUE_KEY || "engine:queue";
-
-function todayKey(name) {
-  const d = new Date().toISOString().slice(0, 10);
-  return `${name}:${d}`;
-}
-
-router.get("/status", async (req, res) => {
+/**
+ * ✅ ROOT DASHBOARD API
+ * GET /api/dashboard
+ */
+router.get("/", async (req, res) => {
   try {
     const [
-      queueSize,
+      queueLength,
       threshold,
-      listingsToday,
-      dayCounter
+      seen,
+      passed
     ] = await Promise.all([
-      redis.llen(QUEUE_KEY),
-      adaptiveThreshold.getThreshold(),
-      redis.get(todayKey("limit:listings")),
-      redis.get("system:dayCounter")
+      redis.llen("engine:queue"),
+      redis.get("winner:threshold"),
+      redis.get("winner:seen"),
+      redis.get("winner:passed")
     ]);
 
     res.json({
       ok: true,
-      system: {
-        phaseDay: Number(dayCounter || 0),
-        queueSize: Number(queueSize || 0),
-        listingsToday: Number(listingsToday || 0),
-        adaptiveThreshold: threshold
+      system: "eBay Automation Engine",
+      queue: {
+        pending: Number(queueLength || 0)
       },
-      features: {
-        repricingEnabled: process.env.REPRICE_ENABLED !== "0",
-        aiImagesEnabled: true,
-        velocityRampEnabled: true
-      },
-      safety: {
-        killSwitch: process.env.KILL_SWITCH === "1" ? "ON" : "OFF"
+      adaptiveThreshold: {
+        threshold: Number(threshold || 0),
+        seen: Number(seen || 0),
+        passed: Number(passed || 0),
+        passRate: seen ? Number(passed / seen).toFixed(2) : 0
       },
       timestamp: new Date().toISOString()
     });
 
   } catch (err) {
-    console.error("Dashboard error:", err.message);
+    console.error("Dashboard error:", err);
     res.status(500).json({
       ok: false,
       error: "Dashboard failed"
