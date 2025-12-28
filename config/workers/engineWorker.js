@@ -2,8 +2,8 @@
 
 const redis = require("../redis");
 const winnerMemory = require("../services/winnerMemory");
-const { computePrice } = require("../services/repricingService");
 const { estimateCompetitors } = require("../services/competitorService");
+const { optimizePrice } = require("../services/repricingOptimizer");
 
 /* ================================
    CONFIG
@@ -90,7 +90,7 @@ async function pollQueue() {
     await sleep(delay);
 
     /* ================================
-       SCORE GATE (SIMULATED)
+       SCORE GATE
     ================================ */
     const score = payload.score || Math.floor(Math.random() * 100);
     const PASS_THRESHOLD = 65;
@@ -105,38 +105,40 @@ async function pollQueue() {
     }
 
     /* ================================
-       SMART REPRICING (READ-ONLY)
+       💰 STEP D3 — PROFIT OPTIMIZED REPRICING
     ================================ */
     payload.enableRepricing = phaseInfo.phase >= 2;
 
     if (payload.enableRepricing) {
       const baseCost = Number(payload.cost || payload.price || 0);
 
-      // placeholder competitor info (will be REAL later)
-     const competitors = estimateCompetitors(payload);
+      const competitors = estimateCompetitors(payload);
+      const competitorMin = competitors.competitorMin;
+      const competitorAvg = competitors.competitorAvg;
 
-const competitorMin = competitors.competitorMin;
-const competitorAvg = competitors.competitorAvg;
-
-      const pricing = computePrice({
-        baseCost,
+      const optimizedPrice = optimizePrice({
+        cost: baseCost,
         competitorMin,
         competitorAvg,
-        minMarginPercent: 12,
-        maxIncreasePercent: 20
+        score,
+        phase: phaseInfo.phase
       });
 
       payload.repricing = {
-        mode: "smart",
-        recommendation: pricing,
+        mode: "profit-optimized",
+        suggestedPrice: optimizedPrice,
+        baseCost,
+        competitorMin,
+        competitorAvg,
+        score,
         evaluatedAt: new Date().toISOString()
       };
 
-      console.log("💰 Price suggested:", pricing.recommendedPrice, pricing.reason);
+      console.log("💰 Optimized price:", optimizedPrice);
     }
 
     /* ================================
-       AI IMAGE PHASE FLAG
+       🖼️ AI IMAGE PHASE FLAG
     ================================ */
     payload.enableAIImages = phaseInfo.phase >= 3;
 
@@ -158,5 +160,5 @@ const competitorAvg = competitors.competitorAvg;
   }
 }
 
-console.log("🚀 Engine Worker running with WINNER MEMORY + SMART REPRICING");
+console.log("🚀 Engine Worker running with WINNER MEMORY + PROFIT REPRICING");
 setInterval(pollQueue, 1000);
