@@ -2,6 +2,7 @@
 
 const redis = require("../redis");
 const winnerMemory = require("../services/winnerMemory");
+const { computePrice } = require("../services/repricingService");
 
 /* ================================
    CONFIG
@@ -88,7 +89,7 @@ async function pollQueue() {
     await sleep(delay);
 
     /* ================================
-       SIMULATED SCORE (PLACEHOLDER)
+       SCORE GATE (SIMULATED)
     ================================ */
     const score = payload.score || Math.floor(Math.random() * 100);
     const PASS_THRESHOLD = 65;
@@ -103,19 +104,38 @@ async function pollQueue() {
     }
 
     /* ================================
-       PHASE FEATURES
+       SMART REPRICING (READ-ONLY)
     ================================ */
     payload.enableRepricing = phaseInfo.phase >= 2;
-    payload.enableAIImages = phaseInfo.phase >= 3;
 
     if (payload.enableRepricing) {
-      payload.repricing = {
-        mode: "competitive",
+      const baseCost = Number(payload.cost || payload.price || 0);
+
+      // placeholder competitor info (will be REAL later)
+      const competitorMin = payload.competitorMin ?? null;
+      const competitorAvg = payload.competitorAvg ?? null;
+
+      const pricing = computePrice({
+        baseCost,
+        competitorMin,
+        competitorAvg,
         minMarginPercent: 12,
-        maxIncreasePercent: 8
+        maxIncreasePercent: 20
+      });
+
+      payload.repricing = {
+        mode: "smart",
+        recommendation: pricing,
+        evaluatedAt: new Date().toISOString()
       };
-      console.log("💰 Repricing enabled");
+
+      console.log("💰 Price suggested:", pricing.recommendedPrice, pricing.reason);
     }
+
+    /* ================================
+       AI IMAGE PHASE FLAG
+    ================================ */
+    payload.enableAIImages = phaseInfo.phase >= 3;
 
     if (payload.enableAIImages) {
       payload.aiImage = {
@@ -125,6 +145,9 @@ async function pollQueue() {
       console.log("🖼️ AI image queued");
     }
 
+    /* ================================
+       FINAL ACTION (SIMULATED)
+    ================================ */
     console.log("🚀 LISTED:", payload.title || sku);
 
   } catch (err) {
@@ -132,5 +155,5 @@ async function pollQueue() {
   }
 }
 
-console.log("🚀 Engine Worker running with WINNER MEMORY");
+console.log("🚀 Engine Worker running with WINNER MEMORY + SMART REPRICING");
 setInterval(pollQueue, 1000);
