@@ -143,9 +143,17 @@ async function pollQueue() {
     payload.enableAIImages = phaseInfo.phase >= 3;
 
     if (payload.enableAIImages) {
-      payload.aiImage = {
-        provider: "external-ai",
-        status: "queued"
+     const imageResult = await aiImageService.enhanceProductImages(payload);
+payload.aiImage = imageResult;
+
+if (imageResult.ok) {
+  console.log("🖼️ AI image pipeline OK for:", sku);
+} else if (imageResult.skipped) {
+  console.log("🟡 AI image skipped:", imageResult.reason);
+} else {
+  console.log("🔴 AI image failed:", imageResult.reason);
+}
+
       };
       console.log("🖼️ AI image queued");
     }
