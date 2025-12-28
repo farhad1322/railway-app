@@ -3,6 +3,7 @@
 const redis = require("../redis");
 const winnerMemory = require("../services/winnerMemory");
 const { computePrice } = require("../services/repricingService");
+const { estimateCompetitors } = require("../services/competitorService");
 
 /* ================================
    CONFIG
@@ -112,8 +113,10 @@ async function pollQueue() {
       const baseCost = Number(payload.cost || payload.price || 0);
 
       // placeholder competitor info (will be REAL later)
-      const competitorMin = payload.competitorMin ?? null;
-      const competitorAvg = payload.competitorAvg ?? null;
+     const competitors = estimateCompetitors(payload);
+
+const competitorMin = competitors.competitorMin;
+const competitorAvg = competitors.competitorAvg;
 
       const pricing = computePrice({
         baseCost,
