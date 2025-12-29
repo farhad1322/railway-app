@@ -13,6 +13,7 @@ const liveSupplierIngestRouter = require("./config/routes/liveSupplierIngest");
 const dashboardRouter = require("./config/routes/dashboard");
 const dashboardUIRouter = require("./config/routes/dashboardUI");
 const testQueueRouter = require("./config/routes/testQueue");
+const testFeedbackRouter = require("./config/routes/testFeedback");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -48,6 +49,7 @@ app.use("/api/throttle", throttleRouter);
 app.use("/api/supplier", liveSupplierIngestRouter);
 app.use("/api/dashboard", dashboardRouter);
 app.use("/api/test", testQueueRouter);
+app.use("/api/test/feedback", testFeedbackRouter);
 
 // ===== UI ROUTES (HTML ONLY) =====
 app.use("/dashboard", dashboardUIRouter);
