@@ -43,3 +43,22 @@ module.exports = {
     return s ? Number(s) : null;
   }
 };
+// ===== FEEDBACK HELPERS =====
+async function boostWinner(sku, amount = 10) {
+  const key = `winner:${sku}`;
+  await redis.hincrby(key, "score", amount);
+}
+
+async function penalizeWinner(sku, amount = 5) {
+  const key = `winner:${sku}`;
+  const score = await redis.hincrby(key, "score", -amount);
+
+  // Auto-demote if score drops too low
+  if (score <= 30) {
+    await markLoser(sku);
+    console.log("🧱 AUTO-BLOCKED by feedback:", sku);
+  }
+}
+
+module.exports.boostWinner = boostWinner;
+module.exports.penalizeWinner = penalizeWinner;
