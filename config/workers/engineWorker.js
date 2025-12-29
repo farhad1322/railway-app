@@ -4,6 +4,7 @@ const redis = require("../redis");
 const winnerMemory = require("../services/winnerMemory");
 const { estimateCompetitors } = require("../services/competitorService");
 const { optimizePrice } = require("../services/repricingOptimizer");
+const aiImageService = require("../services/aiImageService"); // ✅ FIX 1
 
 /* ================================
    CONFIG
@@ -112,9 +113,8 @@ async function pollQueue() {
     if (payload.enableRepricing) {
       const baseCost = Number(payload.cost || payload.price || 0);
 
-      const competitors = estimateCompetitors(payload);
-      const competitorMin = competitors.competitorMin;
-      const competitorAvg = competitors.competitorAvg;
+      const { competitorMin, competitorAvg } =
+        estimateCompetitors(payload);
 
       const optimizedPrice = optimizePrice({
         cost: baseCost,
@@ -138,24 +138,23 @@ async function pollQueue() {
     }
 
     /* ================================
-       🖼️ AI IMAGE PHASE FLAG
+       🖼️ AI IMAGE GENERATION (SAFE)
     ================================ */
     payload.enableAIImages = phaseInfo.phase >= 3;
 
     if (payload.enableAIImages) {
-     const imageResult = await aiImageService.enhanceProductImages(payload);
-payload.aiImage = imageResult;
+      const imageResult =
+        await aiImageService.enhanceProductImages(payload);
 
-if (imageResult.ok) {
-  console.log("🖼️ AI image pipeline OK for:", sku);
-} else if (imageResult.skipped) {
-  console.log("🟡 AI image skipped:", imageResult.reason);
-} else {
-  console.log("🔴 AI image failed:", imageResult.reason);
-}
+      payload.aiImage = imageResult;
 
-      };
-      console.log("🖼️ AI image queued");
+      if (imageResult.ok) {
+        console.log("🖼️ AI images generated for:", sku);
+      } else if (imageResult.skipped) {
+        console.log("🟡 AI image skipped:", imageResult.reason);
+      } else {
+        console.log("🔴 AI image failed:", imageResult.reason);
+      }
     }
 
     /* ================================
@@ -164,9 +163,9 @@ if (imageResult.ok) {
     console.log("🚀 LISTED:", payload.title || sku);
 
   } catch (err) {
-    console.error("❌ Worker error:", err.message);
+    console.error("❌ Worker error:", err);
   }
 }
 
-console.log("🚀 Engine Worker running with WINNER MEMORY + PROFIT REPRICING");
+console.log("🚀 Engine Worker running with WINNER MEMORY + PROFIT REPRICING + AI IMAGES");
 setInterval(pollQueue, 1000);
