@@ -1,36 +1,53 @@
 // config/routes/testFeedback.js
 const express = require("express");
-const redis = require("../redis");
-
 const router = express.Router();
 
+const winnerMemory = require("../services/winnerMemory");
+const redis = require("../redis");
+
 /**
- * TEST SALES FEEDBACK ENDPOINT
- * SAFE — no real money, no eBay API
+ * TEST FEEDBACK ENDPOINT (SAFE)
+ * This simulates a sale or failure signal
  */
 router.post("/sale", async (req, res) => {
   try {
-    const payload = {
-      sku: req.body.sku,
-      sold: Boolean(req.body.sold),
-      profit: Number(req.body.profit || 0),
-      at: new Date().toISOString()
-    };
+    const { sku, sold, profit } = req.body;
 
-    await redis.lpush(
-      "engine:sales:feedback",
-      JSON.stringify(payload)
-    );
+    if (!sku) {
+      return res.status(400).json({
+        ok: false,
+        error: "sku is required"
+      });
+    }
 
-    res.json({
+    if (sold === true) {
+      await winnerMemory.markWinner(sku, profit || 0);
+
+      await redis.incr(`feedback:wins:${sku}`);
+
+      return res.json({
+        ok: true,
+        message: "Winner feedback applied",
+        sku,
+        profit: profit || 0
+      });
+    }
+
+    // NOT SOLD → penalize
+    await winnerMemory.markLoser(sku);
+    await redis.incr(`feedback:losses:${sku}`);
+
+    return res.json({
       ok: true,
-      message: "Feedback pushed to engine",
-      payload
+      message: "Loser feedback applied",
+      sku
     });
+
   } catch (err) {
+    console.error("Feedback error:", err.message);
     res.status(500).json({
       ok: false,
-      error: err.message
+      error: "Feedback processing failed"
     });
   }
 });
