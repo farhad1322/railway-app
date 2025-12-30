@@ -1,50 +1,78 @@
 // config/routes/feedback.js
+// Sales feedback + velocity-based repricing (SAFE MODE)
 
 const express = require("express");
 const redis = require("../redis");
 const winnerMemory = require("../services/winnerMemory");
+const { recordSale, recommendPriceAdjustment } = require("../services/salesVelocityService");
 
 const router = express.Router();
 
 /**
- * TEST SALES FEEDBACK (SAFE)
  * POST /api/feedback/sale
+ * Body:
+ * {
+ *   "sku": "TEST-SKU-1",
+ *   "currentPrice": 12.99,
+ *   "hoursToSale": 8,
+ *   "profit": 7,
+ *   "sold": true
+ * }
  */
 router.post("/sale", async (req, res) => {
   try {
-    const { sku, sold, profit } = req.body;
+    const {
+      sku,
+      currentPrice,
+      hoursToSale,
+      profit,
+      sold
+    } = req.body;
 
-    if (!sku) {
+    if (!sku || currentPrice == null || hoursToSale == null) {
       return res.status(400).json({
         ok: false,
-        error: "SKU is required"
+        error: "sku, currentPrice, and hoursToSale are required"
       });
     }
 
-    // Track velocity
-    const velocityKey = `sales:velocity:${sku}`;
-    if (sold === true) {
-      await redis.incr(velocityKey);
-      await redis.expire(velocityKey, 60 * 60 * 24 * 7); // 7 days
-    }
+    /* =========================
+       RECORD SALE VELOCITY
+    ========================= */
+    let velocityInfo = null;
+    let repricing = null;
 
-    // Update winner memory
     if (sold === true) {
+      velocityInfo = await recordSale({
+        sku,
+        hoursToSale,
+        profit: profit || 0
+      });
+
+      // Mark as winner
       await winnerMemory.markWinner(sku, profit || 0);
+
+      // Recommend repricing
+      repricing = recommendPriceAdjustment({
+        currentPrice: Number(currentPrice),
+        velocity: velocityInfo.velocity
+      });
     } else {
+      // Mark loser if explicitly not sold
       await winnerMemory.markLoser(sku);
     }
 
     res.json({
       ok: true,
-      message: "Sales feedback recorded",
       sku,
       sold,
+      velocity: velocityInfo?.velocity || "none",
+      repricing,
       profit: profit || 0
     });
 
   } catch (err) {
-    console.error("Feedback error:", err);
+    console.error("Feedback error:", err.message);
     res.status(500).json({
       ok: false,
       error: "Feedback processing failed"
