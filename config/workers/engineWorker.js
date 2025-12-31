@@ -1,38 +1,24 @@
 // config/workers/engineWorker.js
-// WINNER MEMORY + PROFIT REPRICING + AI IMAGES (FAST ONLY) + ADAPTIVE THRESHOLD
+// WINNER MEMORY + PROFIT REPRICING + FAST AI IMAGES + TELEGRAM ALERTS
 
 const redis = require("../redis");
 const winnerMemory = require("../services/winnerMemory");
 const { computePrice } = require("../services/repricingService");
 const { estimateCompetitors } = require("../services/competitorService");
 const { optimizePrice } = require("../services/repricingOptimizer");
-function isFastWinner({ winner, hoursToSale, velocity }) {
-  const fastOnly = String(process.env.IMAGE_FAST_ONLY || "0") === "1";
-  if (!fastOnly) return true; // fallback: allow all
 
-  const maxHours = Number(process.env.FAST_SALE_HOURS || 6);
-  const minVelocity = Number(process.env.FAST_VELOCITY_MIN || 2);
-
-  return (
-    winner === true &&
-    Number(hoursToSale) <= maxHours &&
-    Number(velocity) >= minVelocity
-  );
-}
-let sendTelegram = null;
-try {
-  ({ sendTelegram } = require("../services/telegramService"));
-} catch {
-  sendTelegram = null;
-}
-
-// OPTIONAL AI IMAGE SERVICE (SAFE LOAD)
+/* ================================
+   OPTIONAL SERVICES (SAFE LOAD)
+================================ */
 let enhanceProductImages = null;
 try {
   ({ enhanceProductImages } = require("../services/aiImageService"));
-} catch {
-  enhanceProductImages = null;
-}
+} catch {}
+
+let sendTelegram = null;
+try {
+  ({ sendTelegram } = require("../services/telegramService"));
+} catch {}
 
 /* ================================
    CONFIG
@@ -121,7 +107,7 @@ async function pollQueue() {
     const payload = JSON.parse(job[1]);
     const sku = payload.sku || "UNKNOWN-SKU";
 
-    /* 🧠 LOSER BLOCK */
+    /* 🧠 HARD LOSER BLOCK */
     if (await winnerMemory.isLoser(sku)) {
       console.log("⛔ LOSER skipped:", sku);
       return;
@@ -134,16 +120,14 @@ async function pollQueue() {
 
     /* ================================
        SCORE GATE
-================================ */
+    ================================ */
     const score = payload.score ?? Math.floor(Math.random() * 100);
     const threshold = await getAdaptiveThreshold();
     const passed = score >= threshold;
 
     const stats = await recordAdaptiveSample(passed);
     console.log(
-      `🧠 score=${score} threshold=${threshold} passed=${passed} passRate=${Math.round(
-        stats.passRate * 100
-      )}%`
+      `🧠 score=${score} threshold=${threshold} passed=${passed}`
     );
 
     if (!passed) {
@@ -155,7 +139,7 @@ async function pollQueue() {
 
     /* ================================
        REPRICING
-================================ */
+    ================================ */
     if (phaseInfo.phase >= 2) {
       try {
         const baseCost = Number(payload.cost || payload.price || 0);
@@ -176,8 +160,13 @@ async function pollQueue() {
           recommendedPrice: pricing.recommendedPrice
         });
 
-        payload.repricing = { pricing, optimized };
-        console.log("💰 Price finalized");
+        payload.repricing = optimized;
+
+        console.log("💰 Price optimized");
+
+        sendTelegram?.(
+          `💰 <b>Price Optimized</b>\nSKU: <code>${sku}</code>\nPrice: <b>${optimized.finalPrice}</b>`
+        );
 
       } catch (e) {
         console.log("⚠️ Repricing skipped:", e.message);
@@ -185,34 +174,46 @@ async function pollQueue() {
     }
 
     /* ================================
-       AI IMAGES — FAST WINNERS ONLY
-================================ */
-    if (
-      phaseInfo.phase >= 3 &&
-      typeof enhanceProductImages === "function"
-    ) {
+       AI IMAGES (FAST WINNERS ONLY)
+    ================================ */
+    if (phaseInfo.phase >= 3 && typeof enhanceProductImages === "function") {
       try {
-        const velocityKey = `sales:velocity:${sku}`;
-        const velocity = Number(await redis.get(velocityKey) || 0);
+        const velocity = Number(await redis.get(`sales:velocity:${sku}`) || 0);
 
         if (velocity >= FAST_SALES_THRESHOLD) {
           const img = await enhanceProductImages(payload);
-          console.log(img.ok ? "🖼️ AI images generated (FAST)" : "🖼️ AI skipped");
-        } else {
-          console.log(`🖼️ AI skipped (velocity=${velocity})`);
+
+          if (img?.ok) {
+            sendTelegram?.(
+              `🖼️ <b>AI Images Generated</b>\nSKU: <code>${sku}</code>\nImages: ${img.images.length}`
+            );
+          }
         }
 
       } catch {
-        console.log("🖼️ AI image error skipped safely");
+        console.log("🖼️ AI image skipped safely");
       }
     }
 
+    /* ================================
+       FINAL ACTION (SIMULATED)
+    ================================ */
     console.log("🚀 LISTED:", payload.title || sku);
+
+    sendTelegram?.(
+      `🚀 <b>Product Listed</b>\nSKU: <code>${sku}</code>\nScore: <b>${score}</b>`
+    );
 
   } catch (err) {
     console.error("❌ Worker error:", err.message);
+    sendTelegram?.(`❌ <b>Engine Error</b>\n${err.message}`);
   }
 }
 
-console.log("🚀 Engine Worker running (STABLE + FAST AI)");
+/* ================================
+   BOOT
+================================ */
+console.log("🚀 Engine Worker running (STABLE + TELEGRAM)");
+sendTelegram?.("🚀 <b>Engine Worker Started</b>\nStatus: STABLE");
+
 setInterval(pollQueue, 1000);
