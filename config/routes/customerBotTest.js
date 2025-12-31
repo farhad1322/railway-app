@@ -1,7 +1,5 @@
-// config/routes/customerBotTest.js
-
 const express = require("express");
-const sendTelegram = require("../../services/sendTelegram"); // ✅ FIXED PATH
+const sendTelegram = require("../services/telegramService");
 
 const router = express.Router();
 
@@ -20,7 +18,7 @@ router.post("/customer", async (req, res) => {
       });
     }
 
-    // ✅ SEND TO TELEGRAM
+    // Send message to Telegram
     await sendTelegram(
       `💬 <b>Customer Message</b>\n\n${message}`
     );
