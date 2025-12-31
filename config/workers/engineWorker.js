@@ -1,5 +1,5 @@
 // config/workers/engineWorker.js
-// WINNER MEMORY + PROFIT REPRICING + (OPTIONAL AI IMAGES) + ADAPTIVE THRESHOLD (SELF-TUNING)
+// WINNER MEMORY + PROFIT REPRICING + AI IMAGES (FAST ONLY) + ADAPTIVE THRESHOLD
 
 const redis = require("../redis");
 const winnerMemory = require("../services/winnerMemory");
@@ -7,11 +7,11 @@ const { computePrice } = require("../services/repricingService");
 const { estimateCompetitors } = require("../services/competitorService");
 const { optimizePrice } = require("../services/repricingOptimizer");
 
-// OPTIONAL AI IMAGE SERVICE (SAFE)
+// OPTIONAL AI IMAGE SERVICE (SAFE LOAD)
 let enhanceProductImages = null;
 try {
   ({ enhanceProductImages } = require("../services/aiImageService"));
-} catch (e) {
+} catch {
   enhanceProductImages = null;
 }
 
@@ -19,6 +19,7 @@ try {
    CONFIG
 ================================ */
 const QUEUE_KEY = process.env.QUEUE_KEY || "engine:queue";
+const FAST_SALES_THRESHOLD = Number(process.env.FAST_SALES_THRESHOLD || 3);
 
 /* ================================
    HELPERS
@@ -56,7 +57,7 @@ async function getPhase() {
 }
 
 /* ================================
-   SAFETY CHECKS
+   SAFETY
 ================================ */
 async function canListToday(maxPerDay) {
   const key = todayKey("limit:listings");
@@ -101,7 +102,7 @@ async function pollQueue() {
     const payload = JSON.parse(job[1]);
     const sku = payload.sku || "UNKNOWN-SKU";
 
-    /* 🧠 WINNER MEMORY */
+    /* 🧠 LOSER BLOCK */
     if (await winnerMemory.isLoser(sku)) {
       console.log("⛔ LOSER skipped:", sku);
       return;
@@ -134,54 +135,56 @@ async function pollQueue() {
     await winnerMemory.markWinner(sku, score);
 
     /* ================================
-       SMART REPRICING (FIXED)
+       REPRICING
 ================================ */
     if (phaseInfo.phase >= 2) {
       try {
         const baseCost = Number(payload.cost || payload.price || 0);
-
         const competitors = estimateCompetitors(payload) || {};
-        const competitorMin = Number(competitors.competitorMin || 0);
-        const competitorAvg = Number(competitors.competitorAvg || 0);
 
         const pricing = computePrice({
           baseCost,
-          competitorMin,
-          competitorAvg,
+          competitorMin: Number(competitors.competitorMin || 0),
+          competitorAvg: Number(competitors.competitorAvg || 0),
           minMarginPercent: 12,
           maxIncreasePercent: 20
         });
 
-        console.log("💰 Price suggested:", pricing.recommendedPrice);
-
         const optimized = optimizePrice({
           baseCost,
-          competitorMin,
-          competitorAvg,
+          competitorMin: pricing.competitorMin,
+          competitorAvg: pricing.competitorAvg,
           recommendedPrice: pricing.recommendedPrice
         });
 
-        if (optimized && optimized.optimizedPrice) {
-          console.log("💰 Optimized price:", optimized.optimizedPrice);
-        } else {
-          console.log("ℹ️ No optimization change applied");
-        }
-
         payload.repricing = { pricing, optimized };
+        console.log("💰 Price finalized");
+
       } catch (e) {
-        console.log("⚠️ Repricing skipped safely:", e.message);
+        console.log("⚠️ Repricing skipped:", e.message);
       }
     }
 
     /* ================================
-       AI IMAGES (SAFE)
+       AI IMAGES — FAST WINNERS ONLY
 ================================ */
-    if (phaseInfo.phase >= 3 && typeof enhanceProductImages === "function") {
+    if (
+      phaseInfo.phase >= 3 &&
+      typeof enhanceProductImages === "function"
+    ) {
       try {
-        const img = await enhanceProductImages(payload);
-        console.log(img.ok ? "🖼️ AI images ready" : "🖼️ AI image skipped");
+        const velocityKey = `sales:velocity:${sku}`;
+        const velocity = Number(await redis.get(velocityKey) || 0);
+
+        if (velocity >= FAST_SALES_THRESHOLD) {
+          const img = await enhanceProductImages(payload);
+          console.log(img.ok ? "🖼️ AI images generated (FAST)" : "🖼️ AI skipped");
+        } else {
+          console.log(`🖼️ AI skipped (velocity=${velocity})`);
+        }
+
       } catch {
-        console.log("🖼️ AI image error skipped");
+        console.log("🖼️ AI image error skipped safely");
       }
     }
 
@@ -192,5 +195,5 @@ async function pollQueue() {
   }
 }
 
-console.log("🚀 Engine Worker running (STABLE)");
+console.log("🚀 Engine Worker running (STABLE + FAST AI)");
 setInterval(pollQueue, 1000);
