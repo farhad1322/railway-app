@@ -1,31 +1,43 @@
-// config/routes/customerBotTest.js
-// TEST endpoint for Telegram customer bot
+// config/routes/botCustomer.js
 
 const express = require("express");
-const { handleCustomerMessage } = require("../services/telegramCustomerBot");
+const sendTelegram = require("../services/sendTelegram");
 
 const router = express.Router();
 
 /**
+ * CUSTOMER MESSAGE HANDLER
  * POST /api/bot/customer
- * Body: { "message": "your text here" }
  */
 router.post("/customer", async (req, res) => {
-  const { message } = req.body;
+  try {
+    const { message } = req.body;
 
-  if (!message) {
-    return res.status(400).json({
+    if (!message) {
+      return res.status(400).json({
+        ok: false,
+        error: "Message is required"
+      });
+    }
+
+    // ✅ SEND TO TELEGRAM
+    await sendTelegram(
+      `💬 <b>Customer Message</b>\n\n${message}`
+    );
+
+    res.json({
+      ok: true,
+      message: "Customer message processed"
+    });
+
+  } catch (err) {
+    console.error("Customer bot error:", err);
+
+    res.status(500).json({
       ok: false,
-      error: "message is required"
+      error: "Customer bot failed"
     });
   }
-
-  await handleCustomerMessage(message);
-
-  res.json({
-    ok: true,
-    message: "Customer message processed"
-  });
 });
 
 module.exports = router;
