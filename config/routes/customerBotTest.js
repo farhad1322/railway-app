@@ -1,7 +1,7 @@
-// config/routes/botCustomer.js
+// config/routes/customerBotTest.js
 
 const express = require("express");
-const sendTelegram = require("../services/sendTelegram");
+const sendTelegram = require("../../services/sendTelegram"); // ✅ FIXED PATH
 
 const router = express.Router();
 
