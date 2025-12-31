@@ -19,6 +19,12 @@ function isFastWinner({ winner, hoursToSale, velocity }) {
     Number(velocity) >= minVelocity
   );
 }
+let sendTelegram = null;
+try {
+  ({ sendTelegram } = require("../services/telegramService"));
+} catch {
+  sendTelegram = null;
+}
 
 // OPTIONAL AI IMAGE SERVICE (SAFE LOAD)
 let enhanceProductImages = null;
