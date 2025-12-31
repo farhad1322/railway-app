@@ -52,6 +52,7 @@ app.use("/api/dashboard", dashboardRouter);
 app.use("/api/test", testQueueRouter);
 app.use("/api/test/feedback", testFeedbackRouter);
 app.use("/api/feedback", feedbackRouter);
+app.use("/api/bot", require("./config/routes/customerBotTest"));
 
 // ===== UI ROUTES (HTML ONLY) =====
 app.use("/dashboard", dashboardUIRouter);
