@@ -6,6 +6,19 @@ const winnerMemory = require("../services/winnerMemory");
 const { computePrice } = require("../services/repricingService");
 const { estimateCompetitors } = require("../services/competitorService");
 const { optimizePrice } = require("../services/repricingOptimizer");
+function isFastWinner({ winner, hoursToSale, velocity }) {
+  const fastOnly = String(process.env.IMAGE_FAST_ONLY || "0") === "1";
+  if (!fastOnly) return true; // fallback: allow all
+
+  const maxHours = Number(process.env.FAST_SALE_HOURS || 6);
+  const minVelocity = Number(process.env.FAST_VELOCITY_MIN || 2);
+
+  return (
+    winner === true &&
+    Number(hoursToSale) <= maxHours &&
+    Number(velocity) >= minVelocity
+  );
+}
 
 // OPTIONAL AI IMAGE SERVICE (SAFE LOAD)
 let enhanceProductImages = null;
