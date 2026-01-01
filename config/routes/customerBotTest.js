@@ -1,5 +1,7 @@
+// config/routes/customerBotTest.js
+
 const express = require("express");
-const sendTelegram = require("../services/telegramService");
+const { sendTelegram } = require("../services/telegramService");
 
 const router = express.Router();
 
@@ -11,21 +13,21 @@ router.post("/customer", async (req, res) => {
   try {
     const { message } = req.body;
 
-    if (!message) {
+    if (!message || typeof message !== "string") {
       return res.status(400).json({
         ok: false,
         error: "Message is required"
       });
     }
 
-    // Send message to Telegram
+    // Send to Telegram
     await sendTelegram(
       `💬 <b>Customer Message</b>\n\n${message}`
     );
 
     res.json({
       ok: true,
-      message: "Customer message processed"
+      message: "Customer message sent to Telegram"
     });
 
   } catch (err) {
