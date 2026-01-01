@@ -1,66 +1,28 @@
-// config/services/telegramCustomerBot.js
-// SAFE Telegram customer reply bot (no eBay API)
-
 const axios = require("axios");
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const BASE_URL = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const CHAT_ID = process.env.TELEGRAM_CUSTOMER_CHAT_ID;
 
-if (!BOT_TOKEN || !CHAT_ID) {
-  console.warn("⚠️ Telegram customer bot not configured");
+if (!TOKEN || !CHAT_ID) {
+  console.warn("⚠️ Telegram CUSTOMER bot missing env variables");
 }
 
-async function sendMessage(text) {
-  if (!BOT_TOKEN || !CHAT_ID) return;
-
+module.exports = async function sendCustomerTelegram(message) {
   try {
-    await axios.post(`${BASE_URL}/sendMessage`, {
-      chat_id: CHAT_ID,
-      text,
-      parse_mode: "HTML"
-    });
-  } catch (err) {
-    console.error("Telegram send failed:", err.message);
-  }
-}
+    if (!TOKEN || !CHAT_ID) return;
 
-// Simple auto-reply logic (SAFE)
-function autoReply(message) {
-  const msg = message.toLowerCase();
-
-  if (msg.includes("price")) {
-    return "💰 Thanks for your interest! Prices are competitive and updated daily.";
-  }
-
-  if (msg.includes("shipping")) {
-    return "🚚 Shipping usually takes 5–10 business days with tracking provided.";
-  }
-
-  if (msg.includes("return")) {
-    return "🔄 Returns are accepted within 30 days. Customer satisfaction is our priority.";
-  }
-
-  if (msg.includes("stock")) {
-    return "📦 Yes, the item is currently in stock.";
-  }
-
-  return null; // escalate to human
-}
-
-async function handleCustomerMessage(message) {
-  const reply = autoReply(message);
-
-  if (reply) {
-    await sendMessage(`🤖 <b>Auto-Reply Sent</b>\n\n${reply}`);
-  } else {
-    await sendMessage(
-      `👤 <b>Customer Message (Manual Reply Needed)</b>\n\n"${message}"`
+    await axios.post(
+      `https://api.telegram.org/bot${TOKEN}/sendMessage`,
+      {
+        chat_id: CHAT_ID,
+        text: message,
+        parse_mode: "HTML"
+      }
     );
-  }
-}
 
-module.exports = {
-  handleCustomerMessage,
-  sendMessage
+    console.log("📨 Customer message sent to Telegram");
+
+  } catch (err) {
+    console.error("❌ Telegram CUSTOMER send failed:", err.message);
+  }
 };
